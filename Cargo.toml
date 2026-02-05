@@ -1,0 +1,75 @@
+[package]
+name = "slack-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+description = "A comprehensive CLI tool for Slack, designed for AI agents and automation"
+repository = "https://github.com/user/slack-cli"
+keywords = ["slack", "cli", "automation", "api"]
+categories = ["command-line-utilities", "api-bindings"]
+
+[[bin]]
+name = "slack"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_keyring"
+path = "src/bin/test_keyring.rs"
+
+[dependencies]
+# CLI parsing
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.5"
+
+# Async runtime
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "io-std"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls", "blocking"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# OAuth2
+oauth2 = "4.4"
+
+# Keyring for token storage (cross-platform)
+keyring = "3"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# URL handling
+url = "2.5"
+
+# Base64 encoding
+base64 = "0.22"
+
+# Rate limiting
+governor = "0.6"
+
+# Open browser
+open = "5"
+
+# Local HTTP server for OAuth callback
+tiny_http = "0.12"
+
+[dev-dependencies]
+mockito = "1.4"
+tokio-test = "0.4"
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.10"
+
+[features]
+default = []
