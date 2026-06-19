@@ -13,12 +13,27 @@ A comprehensive Rust CLI tool for Slack, designed for AI agents and automation.
 
 ## Installation
 
+### Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TeamCadenceAI/slack-cli/main/install.sh | sh
+```
+
+Installs to `~/.slack/bin/slack` and symlinks into `~/.local/bin/slack`. On macOS the quarantine attribute is removed automatically so Gatekeeper won't block the binary.
+
 ### From Source
 
 ```bash
-git clone https://github.com/user/slack-cli
+git clone https://github.com/TeamCadenceAI/slack-cli
 cd slack-cli
-cargo install --path .
+cargo build --release
+# binary at target/release/slack
+```
+
+Or via `cargo install`:
+
+```bash
+cargo install --git https://github.com/TeamCadenceAI/slack-cli
 ```
 
 ### Shell Completions
