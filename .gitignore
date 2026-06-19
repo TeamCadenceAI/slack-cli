@@ -1,3 +1,7 @@
 /target
 /.ralph
 run-ralph-loop.sh
+/.agents
+/.claude
+/.codex
+/.pi

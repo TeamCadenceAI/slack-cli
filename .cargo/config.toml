@@ -1,5 +1,1 @@
-[env]
-TMPDIR = "target/tmp"
-
-[doc]
-rustdoc-args = ["--test-args", "--test-run-directory", "target/tmp"]
+[build]
