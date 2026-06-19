@@ -11,6 +11,16 @@ A comprehensive Rust CLI tool for Slack, designed for AI agents and automation.
 - **Fast and reliable**: Built with Rust for performance and safety
 - **Shell completions**: Bash, Zsh, Fish, PowerShell
 
+## Agent Skill
+
+If you're using an AI coding agent (Claude, Codex, Cursor, etc.), install the Slack skill so your agent knows how to use this CLI:
+
+```bash
+npx skills add TeamCadenceAI/slack-cli
+```
+
+The skill lives in [`skills/slack/`](skills/slack/) and covers all commands with usage examples.
+
 ## Installation
 
 ### Quick Install

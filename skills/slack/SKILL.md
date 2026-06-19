@@ -1,5 +1,7 @@
 # slack
 
+> Install this skill: `npx skills add TeamCadenceAI/slack-cli`
+
 Command-line interface for Slack workspaces, optimized for AI agents and automation.
 
 ## Prerequisite
