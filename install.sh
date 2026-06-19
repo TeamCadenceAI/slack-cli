@@ -181,28 +181,36 @@ path_contains_link_dir() {
   esac
 }
 
-print_path_hint() {
+add_to_path() {
   SHELL_NAME="$(basename "${SHELL:-sh}")"
   case "${SHELL_NAME}" in
     fish)
-      warn "${LINK_DIR} is not on PATH; add to ~/.config/fish/config.fish:"
-      printf '  fish_add_path %s\n' "${LINK_DIR}" >&2
+      RC_FILE="${HOME}/.config/fish/config.fish"
+      LINE="fish_add_path ${LINK_DIR}"
       ;;
     zsh)
-      warn "${LINK_DIR} is not on PATH; add to ~/.zshrc:"
-      printf '  export PATH="%s:$PATH"\n' "${LINK_DIR}" >&2
+      RC_FILE="${HOME}/.zshrc"
+      LINE="export PATH=\"${LINK_DIR}:\$PATH\""
       ;;
     bash)
-      RC="${HOME}/.bashrc"
-      [ "$(uname -s)" = "Darwin" ] && RC="${HOME}/.bash_profile"
-      warn "${LINK_DIR} is not on PATH; add to ${RC}:"
-      printf '  export PATH="%s:$PATH"\n' "${LINK_DIR}" >&2
+      RC_FILE="${HOME}/.bashrc"
+      [ "$(uname -s)" = "Darwin" ] && RC_FILE="${HOME}/.bash_profile"
+      LINE="export PATH=\"${LINK_DIR}:\$PATH\""
       ;;
     *)
-      warn "${LINK_DIR} is not on PATH; add to ~/.profile:"
-      printf '  export PATH="%s:$PATH"\n' "${LINK_DIR}" >&2
+      RC_FILE="${HOME}/.profile"
+      LINE="export PATH=\"${LINK_DIR}:\$PATH\""
       ;;
   esac
+
+  if [ -f "${RC_FILE}" ] && grep -qF "${LINK_DIR}" "${RC_FILE}" 2>/dev/null; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${RC_FILE}")"
+  printf '\n# Added by slack-cli installer\n%s\n' "${LINE}" >> "${RC_FILE}"
+  status "Added ${LINK_DIR} to PATH in ${RC_FILE}"
+  warn "Restart your shell or run: source ${RC_FILE}"
 }
 
 verify_install() {
@@ -216,7 +224,7 @@ verify_install() {
       warn "${BINARY_NAME} resolves to ${RESOLVED} — move ${LINK_DIR} earlier in PATH to use this install"
     fi
   else
-    print_path_hint
+    add_to_path
   fi
 }
 
