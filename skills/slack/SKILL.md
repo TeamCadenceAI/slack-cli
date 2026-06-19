@@ -3,6 +3,7 @@ name: slack
 description: Send and read Slack messages, search conversations, manage channels, users, files, reactions, status, and reminders. Use when the user wants to interact with Slack — post a message, check recent messages, search for something, or manage their workspace.
 license: MIT
 compatibility: Requires the slack CLI. If not installed, direct the user to https://github.com/TeamCadenceAI/slack-cli
+allowed-tools: Bash(slack:*)
 ---
 
 # slack
