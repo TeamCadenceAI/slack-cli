@@ -21,7 +21,7 @@ pub struct ChannelPlain<'a> {
 }
 
 /// Write channels as TSV to stdout
-/// Format: id<TAB>name<TAB>num_members<TAB>type
+/// Format: `id\tname\tnum_members\ttype`
 pub fn write_channels_plain(channels: &[ChannelPlain]) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -48,7 +48,7 @@ pub struct MessagePlain<'a> {
 }
 
 /// Write messages as TSV to stdout
-/// Format: timestamp<TAB>user_id<TAB>channel<TAB>text
+/// Format: `timestamp\tuser_id\tchannel\ttext`
 pub fn write_messages_plain(messages: &[MessagePlain]) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -75,7 +75,7 @@ pub struct UserPlain<'a> {
 }
 
 /// Write users as TSV to stdout
-/// Format: id<TAB>name<TAB>real_name<TAB>email
+/// Format: `id\tname\treal_name\temail`
 pub fn write_users_plain(users: &[UserPlain]) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -102,7 +102,7 @@ pub struct FilePlain<'a> {
 }
 
 /// Write files as TSV to stdout
-/// Format: id<TAB>name<TAB>filetype<TAB>size
+/// Format: `id\tname\tfiletype\tsize`
 pub fn write_files_plain(files: &[FilePlain]) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();

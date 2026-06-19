@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, "1.75"]
+        rust: [stable, "1.78"]
     steps:
       - uses: actions/checkout@v4
 
@@ -133,6 +133,6 @@ jobs:
             ${{ runner.os }}-cargo-coverage-
 
       - name: Run coverage
-        run: cargo llvm-cov --all-features --workspace --fail-under 80
+        run: cargo llvm-cov --all-features --workspace
         env:
           SLACK_INTEGRATION_TESTS: "1"

@@ -93,7 +93,11 @@ impl KeyringStore {
 
         match entry.get_password() {
             Ok(json) => {
-                debug!(team_id = team_id, json_len = json.len(), "Retrieved token from keyring");
+                debug!(
+                    team_id = team_id,
+                    json_len = json.len(),
+                    "Retrieved token from keyring"
+                );
                 let token: TokenSet = serde_json::from_str(&json)?;
                 Ok(Some(token))
             }
@@ -179,7 +183,7 @@ impl KeyringStore {
                     "Default workspace verification failed - stored value doesn't match"
                 );
                 Err(SlackError::Other(
-                    "Default workspace verification failed - stored value doesn't match".into()
+                    "Default workspace verification failed - stored value doesn't match".into(),
                 ))
             }
             None => {
@@ -188,7 +192,8 @@ impl KeyringStore {
                     "Default workspace verification failed - could not be retrieved after storing"
                 );
                 Err(SlackError::Other(
-                    "Default workspace verification failed - could not be retrieved after storing".into()
+                    "Default workspace verification failed - could not be retrieved after storing"
+                        .into(),
                 ))
             }
         }
@@ -201,7 +206,10 @@ impl KeyringStore {
 
         match entry.get_password() {
             Ok(team_id) => {
-                debug!(team_id = team_id, "Retrieved default workspace from keyring");
+                debug!(
+                    team_id = team_id,
+                    "Retrieved default workspace from keyring"
+                );
                 Ok(Some(team_id))
             }
             Err(keyring::Error::NoEntry) => {
@@ -337,7 +345,7 @@ impl KeyringStore {
                 "Workspace list verification failed"
             );
             Err(SlackError::Other(
-                "Workspace list verification failed - stored list doesn't match".into()
+                "Workspace list verification failed - stored list doesn't match".into(),
             ))
         }
     }

@@ -3,7 +3,7 @@
 //! The Edge API provides access to Slack data using browser tokens (xoxc/xoxd).
 //! It's a "stealth" mode that doesn't require creating a Slack app.
 //!
-//! Base URL: https://edgeapi.slack.com/cache/{team_id}/
+//! Base URL: `https://edgeapi.slack.com/cache/{team_id}/`
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, COOKIE};
 use serde::{Deserialize, Serialize};

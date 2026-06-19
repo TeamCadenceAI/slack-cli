@@ -680,8 +680,8 @@ fn parse_message_identifier(identifier: &str) -> Result<(String, String)> {
 /// Parse a Slack permalink URL to extract channel and timestamp
 ///
 /// Formats:
-/// - https://workspace.slack.com/archives/C123ABC/p1234567890123456
-/// - https://workspace.slack.com/archives/C123ABC/p1234567890123456?thread_ts=...
+/// - `https://workspace.slack.com/archives/C123ABC/p1234567890123456`
+/// - `https://workspace.slack.com/archives/C123ABC/p1234567890123456?thread_ts=...`
 fn parse_slack_permalink(url: &str) -> Result<(String, String)> {
     // Parse the URL
     let parsed =

@@ -2,7 +2,7 @@
 name = "slack-cli"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.78"
 license = "MIT"
 description = "A comprehensive CLI tool for Slack, designed for AI agents and automation"
 repository = "https://github.com/user/slack-cli"
