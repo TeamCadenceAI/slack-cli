@@ -4,10 +4,26 @@
 //! Tokens are stored as JSON-serialized TokenSet values.
 
 use keyring::Entry;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use super::TokenSet;
 use crate::error::{Result, SlackError};
+
+/// Returns `true` if a keyring error means the platform credential store is
+/// unavailable or inaccessible (as opposed to simply having no entry).
+///
+/// On a machine where the OS secret store can't be reached — e.g. headless
+/// Linux with no Secret Service (`org.freedesktop.secrets`) daemon, or a
+/// locked/unavailable backend — *read* operations degrade to "no credentials
+/// stored" so the CLI cleanly reports `auth_required` instead of surfacing a
+/// raw platform error. *Write* operations still treat these as hard errors so
+/// we never silently fail to persist a token.
+fn backend_unavailable(err: &keyring::Error) -> bool {
+    matches!(
+        err,
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_)
+    )
+}
 
 /// Service name for keyring entries
 const SERVICE_NAME: &str = "slack-cli";
@@ -103,6 +119,15 @@ impl KeyringStore {
             }
             Err(keyring::Error::NoEntry) => {
                 debug!(team_id = team_id, "No token found in keyring");
+                Ok(None)
+            }
+            Err(e) if backend_unavailable(&e) => {
+                warn!(
+                    service = SERVICE_NAME,
+                    key = key,
+                    error = %e,
+                    "Keyring backend unavailable; treating as no stored token"
+                );
                 Ok(None)
             }
             Err(e) => {
@@ -216,6 +241,15 @@ impl KeyringStore {
                 debug!("No default workspace set in keyring");
                 Ok(None)
             }
+            Err(e) if backend_unavailable(&e) => {
+                warn!(
+                    service = SERVICE_NAME,
+                    key = DEFAULT_KEY,
+                    error = %e,
+                    "Keyring backend unavailable; treating as no default workspace"
+                );
+                Ok(None)
+            }
             Err(e) => {
                 error!(
                     service = SERVICE_NAME,
@@ -271,6 +305,15 @@ impl KeyringStore {
             }
             Err(keyring::Error::NoEntry) => {
                 debug!("No workspace list found in keyring");
+                Ok(vec![])
+            }
+            Err(e) if backend_unavailable(&e) => {
+                warn!(
+                    service = SERVICE_NAME,
+                    key = WORKSPACE_LIST_KEY,
+                    error = %e,
+                    "Keyring backend unavailable; treating as empty workspace list"
+                );
                 Ok(vec![])
             }
             Err(e) => {

@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - macOS/iOS: `apple-native` (Keychain via `security-framework`)
   - Windows: `windows-native` (Credential Manager)
   - Linux: `sync-secret-service` (Secret Service / gnome-keyring / KWallet)
+- **Graceful degradation when the keyring is unavailable**: token *read*
+  operations now treat an unreachable/inaccessible platform store (e.g.
+  headless Linux with no Secret Service daemon, or a locked backend) as "no
+  credentials stored", so commands cleanly report `auth_required` instead of a
+  raw platform error. Writes still fail hard so a token is never silently
+  dropped. Set `SLACK_TOKEN_STORE_PATH` to use file-based storage in headless
+  environments.
 
 ### Changed
 
@@ -27,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can use. The Linux backend uses the `vendored` feature to build libdbus from
   source, so builds (including the static musl target) don't require
   `libdbus-1-dev` on the host.
+- The `--version` integration test now asserts against `CARGO_PKG_VERSION`
+  instead of a hard-coded version string.
 
 ## [0.1.0] - 2024-02-05
 
