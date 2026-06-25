@@ -1,6 +1,6 @@
 [package]
 name = "slack-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
@@ -35,7 +35,13 @@ serde_json = "1.0"
 # OAuth2
 oauth2 = "4.4"
 
-# Keyring for token storage (cross-platform)
+# Keyring for token storage (cross-platform).
+# keyring v3 compiles NO credential backend unless a platform feature is
+# enabled; without one it silently falls back to a non-persistent in-memory
+# mock store, so tokens vanish between invocations. The actual backend is
+# selected per-platform in the [target.*] sections below. This base entry
+# (no features) guarantees the crate is present on any other platform,
+# falling back to keyring's mock store rather than failing to compile.
 keyring = "3"
 
 # Time handling
@@ -63,6 +69,24 @@ open = "5"
 
 # Local HTTP server for OAuth callback
 tiny_http = "0.12"
+
+# --- Platform-specific keyring backends ---
+# Backend features are gated per-OS so each release target only pulls the
+# credential store it can actually use.
+
+# macOS (x86_64 + aarch64 darwin): Keychain via security-framework.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# Windows (msvc): Credential Manager via windows-sys.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# Linux (gnu + musl): Secret Service (gnome-keyring/KWallet) via libdbus.
+# `vendored` builds libdbus from source so we don't require libdbus-1-dev on
+# the build host and the static musl target links cleanly.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "vendored"] }
 
 [dev-dependencies]
 mockito = "1.4"

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-25
+
+### Fixed
+
+- **Token storage on macOS (and all platforms)**: `keyring` v3 compiles no
+  credential backend unless a platform feature is enabled. The dependency was
+  declared without any features, so the CLI silently fell back to keyring's
+  non-persistent in-memory mock store — tokens appeared to save but vanished
+  between invocations. Enabled the native backends so tokens persist:
+  - macOS/iOS: `apple-native` (Keychain via `security-framework`)
+  - Windows: `windows-native` (Credential Manager)
+  - Linux: `sync-secret-service` (Secret Service / gnome-keyring / KWallet)
+
+### Changed
+
+- Keyring backend features are now gated per-platform via `[target.*]`
+  dependency tables so each release target only pulls the credential store it
+  can use. The Linux backend uses the `vendored` feature to build libdbus from
+  source, so builds (including the static musl target) don't require
+  `libdbus-1-dev` on the host.
+
 ## [0.1.0] - 2024-02-05
 
 ### Added
@@ -86,5 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows for testing and releases
 - No external config files required
 
-[Unreleased]: https://github.com/user/slack-cli/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/user/slack-cli/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/user/slack-cli/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/user/slack-cli/releases/tag/v0.1.0
