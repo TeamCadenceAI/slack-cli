@@ -42,6 +42,95 @@ impl<T: DeserializeOwned> SlackResponse<T> {
     }
 }
 
+/// Parse a Slack Web API response from a raw JSON value.
+///
+/// Checks `ok`/`error` on the raw value before attempting to deserialize the
+/// payload, so a payload that fails to deserialize surfaces the serde error
+/// (with the offending JSON logged at debug level for `--verbose`) instead of
+/// the misleading `missing_data`.
+pub fn parse_slack_response_value<T: DeserializeOwned>(
+    value: serde_json::Value,
+) -> Result<T, SlackError> {
+    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    if !ok {
+        let error = value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown_error")
+            .to_string();
+        let detail = value
+            .get("response_metadata")
+            .and_then(|m| m.get("messages"))
+            .and_then(|m| m.as_array())
+            .map(|msgs| {
+                msgs.iter()
+                    .filter_map(|m| m.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|s| !s.is_empty());
+        return Err(SlackError::Api { error, detail });
+    }
+
+    match serde_json::from_value::<T>(value.clone()) {
+        Ok(data) => Ok(data),
+        Err(e) => {
+            tracing::debug!(
+                "failed to deserialize response payload; offending JSON: {}",
+                truncate_json(&value, 4000)
+            );
+            Err(SlackError::Api {
+                error: "parse_error".to_string(),
+                detail: Some(format!(
+                    "response was ok but the payload failed to deserialize: {} (re-run with --verbose to see the offending JSON)",
+                    e
+                )),
+            })
+        }
+    }
+}
+
+/// Render a JSON value truncated to at most `max_chars` characters.
+fn truncate_json(value: &serde_json::Value, max_chars: usize) -> String {
+    let s = value.to_string();
+    if s.chars().count() <= max_chars {
+        s
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}… (truncated)", truncated)
+    }
+}
+
+/// Deserialize a list of messages element-by-element, skipping (with a stderr
+/// warning) any element that fails to parse.
+///
+/// Slack message payloads vary wildly (bot attachments, ext-shared metadata,
+/// new subtypes); one unparseable message should not blank an entire page.
+fn deserialize_messages_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<crate::models::Message>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    let mut messages = Vec::with_capacity(raw.len());
+    for (index, item) in raw.into_iter().enumerate() {
+        match serde_json::from_value::<crate::models::Message>(item.clone()) {
+            Ok(msg) => messages.push(msg),
+            Err(e) => {
+                eprintln!(
+                    "warning: skipping message at index {} that failed to parse: {} ({})",
+                    index,
+                    e,
+                    truncate_json(&item, 300)
+                );
+            }
+        }
+    }
+    Ok(messages)
+}
+
 /// Metadata included in some API responses
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ResponseMetadata {
@@ -103,6 +192,7 @@ pub struct ConversationsListResponse {
 /// Response containing message history
 #[derive(Debug, Deserialize)]
 pub struct ConversationsHistoryResponse {
+    #[serde(deserialize_with = "deserialize_messages_lossy")]
     pub messages: Vec<crate::models::Message>,
     #[serde(default)]
     pub has_more: bool,
@@ -113,6 +203,7 @@ pub struct ConversationsHistoryResponse {
 /// Response containing thread replies
 #[derive(Debug, Deserialize)]
 pub struct ConversationsRepliesResponse {
+    #[serde(deserialize_with = "deserialize_messages_lossy")]
     pub messages: Vec<crate::models::Message>,
     #[serde(default)]
     pub has_more: bool,
@@ -140,6 +231,7 @@ pub struct SearchResults {
     pub total: u32,
     #[serde(default)]
     pub pagination: Option<SearchPagination>,
+    #[serde(deserialize_with = "deserialize_messages_lossy")]
     pub matches: Vec<crate::models::Message>,
 }
 
@@ -298,6 +390,85 @@ pub struct UsersGetPresenceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_slack_response_value_success() {
+        let value = serde_json::json!({
+            "ok": true,
+            "messages": [{"ts": "1.1", "text": "hi"}],
+            "has_more": false
+        });
+        let response: ConversationsHistoryResponse = parse_slack_response_value(value).unwrap();
+        assert_eq!(response.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_slack_response_value_api_error_with_metadata() {
+        let value = serde_json::json!({
+            "ok": false,
+            "error": "invalid_arguments",
+            "response_metadata": {"messages": ["[ERROR] missing required field: channel"]}
+        });
+        let result: Result<ConversationsHistoryResponse, _> = parse_slack_response_value(value);
+        match result.unwrap_err() {
+            SlackError::Api { error, detail } => {
+                assert_eq!(error, "invalid_arguments");
+                assert!(detail.unwrap().contains("missing required field"));
+            }
+            other => panic!("expected Api error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_slack_response_value_payload_parse_failure_is_loud() {
+        // `ok: true` but the payload is missing the required `messages` array:
+        // must surface a parse_error with the serde message, not "missing_data".
+        let value = serde_json::json!({"ok": true, "unexpected": "shape"});
+        let result: Result<ConversationsHistoryResponse, _> = parse_slack_response_value(value);
+        match result.unwrap_err() {
+            SlackError::Api { error, detail } => {
+                assert_eq!(error, "parse_error");
+                assert!(detail.unwrap().contains("messages"));
+            }
+            other => panic!("expected Api error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_messages_lossy_skips_bad_element() {
+        // Second element has a non-string `ts` and cannot deserialize; the
+        // other two must survive.
+        let value = serde_json::json!({
+            "ok": true,
+            "has_more": false,
+            "messages": [
+                {"ts": "1.1", "text": "first"},
+                {"ts": {"weird": true}, "text": "broken"},
+                {"ts": "3.3", "text": "third"}
+            ]
+        });
+        let response: ConversationsHistoryResponse = parse_slack_response_value(value).unwrap();
+        assert_eq!(response.messages.len(), 2);
+        assert_eq!(response.messages[0].ts, "1.1");
+        assert_eq!(response.messages[1].ts, "3.3");
+    }
+
+    #[test]
+    fn test_search_matches_lossy_skips_bad_element() {
+        let value = serde_json::json!({
+            "ok": true,
+            "messages": {
+                "total": 2,
+                "matches": [
+                    {"ts": "1.1", "text": "hit"},
+                    {"text": "no ts field"}
+                ]
+            }
+        });
+        let response: SearchMessagesResponse = parse_slack_response_value(value).unwrap();
+        assert_eq!(response.messages.matches.len(), 1);
+        assert_eq!(response.messages.matches[0].ts, "1.1");
+    }
 
     #[test]
     fn test_slack_response_success() {

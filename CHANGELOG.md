@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-18
+
+### Fixed
+
+- **Web API requests now use form encoding**: all Web API calls were sent as
+  JSON bodies, which Slack silently ignores on several endpoints when using
+  browser (xoxc) tokens — `messages thread` and `messages search` failed with
+  `invalid_arguments: missing required field`. Requests are now sent as
+  `application/x-www-form-urlencoded` (the canonical encoding for the Slack
+  Web API); nested values such as `blocks`/`attachments` are encoded as JSON
+  strings within form fields. The Edge API is unchanged (it expects JSON).
+- **Payload deserialization failures are no longer masked as `missing_data`**:
+  responses are parsed as raw JSON first (checking `ok`/`error`), and payload
+  parse failures now return a `parse_error` with the underlying serde message
+  (the offending JSON is logged with `--verbose`) instead of the misleading
+  `missing_data: Response was ok but contained no data`.
+- **One unparseable message no longer blanks an entire page**: message lists
+  (`conversations.history`, `conversations.replies`, `search.messages`) are
+  deserialized element-by-element; elements that fail to parse are skipped
+  with a warning on stderr while the rest are returned. stdout stays
+  machine-readable JSON.
+- **Huddle/system messages parse correctly**: `Message.channel` now accepts
+  both the `{id, name}` object form (search results) and the bare channel ID
+  string form (e.g. `slack_system.huddle.started` messages), which previously
+  failed deserialization and caused `messages list` to fail on affected pages.
+
+### Changed
+
+- CLI tests are now hermetic: they point `SLACK_TOKEN_STORE_PATH` at a
+  nonexistent file and clear `SLACK_TOKEN`/`SLACK_WORKSPACE`, so they no
+  longer read the developer's real keychain.
+
 ## [0.1.1] - 2026-06-25
 
 ### Fixed
@@ -116,6 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows for testing and releases
 - No external config files required
 
-[Unreleased]: https://github.com/user/slack-cli/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/user/slack-cli/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/user/slack-cli/releases/tag/v0.1.0
+[Unreleased]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/TeamCadenceAI/slack-cli/releases/tag/v0.1.0

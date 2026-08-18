@@ -91,8 +91,9 @@ pub struct Message {
     #[serde(default)]
     pub edited: Option<EditInfo>,
 
-    /// Channel ID (included in search results)
-    #[serde(default)]
+    /// Channel (an `{id, name}` object in search results, a bare channel ID
+    /// string in some history payloads such as huddle system messages)
+    #[serde(default, deserialize_with = "deserialize_channel_info")]
     pub channel: Option<ChannelInfo>,
 
     /// Permalink URL (included in search results)
@@ -283,9 +284,47 @@ pub struct ChannelInfo {
     pub name: Option<String>,
 }
 
+/// Accept either a bare channel ID string or an `{id, name}` object.
+fn deserialize_channel_info<'de, D>(deserializer: D) -> Result<Option<ChannelInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ChannelRepr {
+        Id(String),
+        Info(ChannelInfo),
+    }
+
+    let value: Option<ChannelRepr> = Option::deserialize(deserializer)?;
+    Ok(value.map(|v| match v {
+        ChannelRepr::Id(id) => ChannelInfo { id, name: None },
+        ChannelRepr::Info(info) => info,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_message_channel_as_string() {
+        let json = r#"{"ts": "1786427394.000000", "channel": "C04TTQVBKTR"}"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.channel.as_ref().unwrap().id, "C04TTQVBKTR");
+        assert!(msg.channel.as_ref().unwrap().name.is_none());
+    }
+
+    #[test]
+    fn test_message_channel_as_object() {
+        let json = r#"{"ts": "1.1", "channel": {"id": "C123", "name": "general"}}"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.channel.as_ref().unwrap().id, "C123");
+        assert_eq!(
+            msg.channel.as_ref().unwrap().name.as_deref(),
+            Some("general")
+        );
+    }
 
     #[test]
     fn test_message_deserialization_basic() {

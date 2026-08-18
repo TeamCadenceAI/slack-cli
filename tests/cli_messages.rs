@@ -7,7 +7,16 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn slack_cmd() -> Command {
-    cargo_bin_cmd!("slack")
+    let mut cmd = cargo_bin_cmd!("slack");
+    // Isolate tests from the developer's real keychain/env: point token
+    // storage at a nonexistent file so commands see "no auth" deterministically.
+    cmd.env(
+        "SLACK_TOKEN_STORE_PATH",
+        std::env::temp_dir().join("slack-cli-tests-no-tokens.json"),
+    );
+    cmd.env_remove("SLACK_TOKEN");
+    cmd.env_remove("SLACK_WORKSPACE");
+    cmd
 }
 
 // ============================================================================

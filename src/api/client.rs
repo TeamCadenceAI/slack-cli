@@ -10,7 +10,7 @@ use crate::auth::TokenSet;
 use crate::error::{Result, SlackError};
 
 use super::rate_limiter::RateLimiter;
-use super::types::SlackResponse;
+use super::types::parse_slack_response_value;
 
 /// Default base URL for Slack Web API
 const DEFAULT_SLACK_API_BASE: &str = "https://slack.com/api";
@@ -27,6 +27,37 @@ const INITIAL_BACKOFF_MS: u64 = 1000;
 /// Get the Slack API base URL, allowing override via environment variable
 fn get_api_base_url() -> String {
     std::env::var(SLACK_API_BASE_ENV).unwrap_or_else(|_| DEFAULT_SLACK_API_BASE.to_string())
+}
+
+/// Convert arbitrary serializable params into form fields for
+/// `application/x-www-form-urlencoded` requests.
+///
+/// The Slack Web API expects form-encoded bodies; with browser (xoxc) tokens
+/// several endpoints silently ignore JSON bodies entirely (responding with
+/// `invalid_arguments` / `missing_charset`). Scalar values are stringified and
+/// nested arrays/objects (e.g. `blocks`, `attachments`, `profile`) are encoded
+/// as JSON strings, which is what the Web API expects for those fields.
+pub(crate) fn to_form_params<P>(params: &P) -> Result<Vec<(String, String)>>
+where
+    P: Serialize + ?Sized,
+{
+    let value = serde_json::to_value(params)
+        .map_err(|e| SlackError::Other(format!("failed to serialize request parameters: {}", e)))?;
+
+    let mut pairs = Vec::new();
+    if let serde_json::Value::Object(map) = value {
+        for (key, v) in map {
+            match v {
+                serde_json::Value::Null => {}
+                serde_json::Value::String(s) => pairs.push((key, s)),
+                serde_json::Value::Bool(b) => pairs.push((key, b.to_string())),
+                serde_json::Value::Number(n) => pairs.push((key, n.to_string())),
+                // Arrays and objects are sent as JSON strings (blocks, attachments, ...)
+                other => pairs.push((key, other.to_string())),
+            }
+        }
+    }
+    Ok(pairs)
 }
 
 /// Slack API client
@@ -129,6 +160,7 @@ impl SlackClient {
     {
         let url = format!("{}/{}", self.base_url, method);
         let headers = self.build_auth_headers();
+        let form_params = to_form_params(params)?;
 
         let mut retries = 0;
         let mut backoff = INITIAL_BACKOFF_MS;
@@ -141,7 +173,7 @@ impl SlackClient {
                 .http
                 .post(&url)
                 .headers(headers.clone())
-                .json(params)
+                .form(&form_params)
                 .send()
                 .await
                 .map_err(SlackError::Network)?;
@@ -175,11 +207,17 @@ impl SlackClient {
                 continue;
             }
 
-            // Parse response
-            let slack_response: SlackResponse<T> =
-                response.json().await.map_err(SlackError::Network)?;
+            // Parse response: deserialize to a Value first so that payload
+            // deserialization failures produce a real error instead of being
+            // silently swallowed into `None` by `#[serde(flatten)]`.
+            let body = response.text().await.map_err(SlackError::Network)?;
+            let value: serde_json::Value =
+                serde_json::from_str(&body).map_err(|e| SlackError::Api {
+                    error: "invalid_response".to_string(),
+                    detail: Some(format!("response was not valid JSON: {}", e)),
+                })?;
 
-            return slack_response.into_result();
+            return parse_slack_response_value(value);
         }
     }
 
@@ -263,6 +301,65 @@ mod tests {
                 scopes: vec![],
             },
         }
+    }
+
+    #[test]
+    fn test_to_form_params_scalars_and_optionals() {
+        use crate::api::web::ConversationsRepliesParams;
+
+        let params = ConversationsRepliesParams::new("C0BQE5V7UHH", "1786937494.427139")
+            .with_limit(30)
+            .with_cursor("abc");
+
+        let mut pairs = to_form_params(&params).unwrap();
+        pairs.sort();
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("channel".to_string(), "C0BQE5V7UHH".to_string()),
+                ("cursor".to_string(), "abc".to_string()),
+                ("limit".to_string(), "30".to_string()),
+                ("ts".to_string(), "1786937494.427139".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_to_form_params_skips_none_fields() {
+        use crate::api::web::ConversationsRepliesParams;
+
+        let params = ConversationsRepliesParams::new("C123", "1.2");
+        let pairs = to_form_params(&params).unwrap();
+
+        assert_eq!(pairs.len(), 2);
+        assert!(!pairs.iter().any(|(k, _)| k == "limit" || k == "cursor"));
+    }
+
+    #[test]
+    fn test_to_form_params_bool_and_nested_json() {
+        #[derive(Serialize)]
+        struct Params {
+            channel: String,
+            inclusive: bool,
+            blocks: serde_json::Value,
+        }
+
+        let params = Params {
+            channel: "C123".to_string(),
+            inclusive: true,
+            blocks: serde_json::json!([{"type": "section"}]),
+        };
+
+        let pairs = to_form_params(&params).unwrap();
+        assert!(pairs.contains(&("inclusive".to_string(), "true".to_string())));
+        assert!(pairs.contains(&("blocks".to_string(), r#"[{"type":"section"}]"#.to_string())));
+    }
+
+    #[test]
+    fn test_to_form_params_unit_params() {
+        let pairs = to_form_params(&()).unwrap();
+        assert!(pairs.is_empty());
     }
 
     #[test]
