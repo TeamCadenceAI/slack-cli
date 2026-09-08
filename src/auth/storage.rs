@@ -1,13 +1,51 @@
 //! Keyring storage for Slack CLI tokens
 //!
 //! Provides cross-platform token storage using the system keyring.
-//! Tokens are stored as JSON-serialized TokenSet values.
+//!
+//! # Single-blob layout
+//!
+//! All state — every workspace's [`TokenSet`], the default workspace, and the
+//! workspace ordering — lives in **one** keyring item (`slack-cli` /
+//! [`STORE_KEY`]) as a single JSON [`KeyringData`] blob. macOS grants Keychain
+//! access per item, so one item means the user is prompted at most once per
+//! process (and "Always Allow" silences it thereafter). The blob is read once
+//! and cached in-process for the lifetime of the command.
+//!
+//! Earlier versions stored one item per workspace (`token:<team_id>`) plus
+//! separate `default` / `workspaces` items, which caused a Keychain prompt for
+//! every workspace when listing or resolving `-w`. On first access the store
+//! transparently migrates that legacy layout into the single blob (see
+//! [`KeyringStore::migrate_legacy`]).
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use keyring::Entry;
 use tracing::{debug, error, warn};
 
 use super::TokenSet;
 use crate::error::{Result, SlackError};
+
+/// Consolidated keyring state, serialized as one JSON blob under [`STORE_KEY`].
+///
+/// Field names match the file-backed store's on-disk shape so the two backends
+/// stay interchangeable.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct KeyringData {
+    /// All stored tokens, keyed by team ID.
+    tokens: HashMap<String, TokenSet>,
+    /// The default workspace team ID, if one is set.
+    default: Option<String>,
+    /// Workspace team IDs in insertion order (preserves list ordering).
+    workspaces: Vec<String>,
+}
+
+/// Process-wide cache of the decoded blob so a single command reads the
+/// keyring at most once. `None` (uninitialized) vs `Some(data)` (loaded).
+fn cache() -> &'static Mutex<Option<KeyringData>> {
+    static CACHE: OnceLock<Mutex<Option<KeyringData>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
 
 /// Returns `true` if a keyring error means the platform credential store is
 /// unavailable or inaccessible (as opposed to simply having no entry).
@@ -28,17 +66,20 @@ fn backend_unavailable(err: &keyring::Error) -> bool {
 /// Service name for keyring entries
 const SERVICE_NAME: &str = "slack-cli";
 
-/// Key for storing the default workspace
-const DEFAULT_KEY: &str = "default";
+/// Key for the single consolidated data blob.
+const STORE_KEY: &str = "store";
 
-/// Prefix for workspace list entries
-const WORKSPACE_LIST_KEY: &str = "workspaces";
+/// Legacy key for the default workspace (pre-single-blob layout).
+const LEGACY_DEFAULT_KEY: &str = "default";
 
-/// Keyring-based token storage
+/// Legacy key for the workspace ID list (pre-single-blob layout).
+const LEGACY_WORKSPACE_LIST_KEY: &str = "workspaces";
+
+/// Keyring-based token storage.
 ///
-/// Tokens are stored with keys like "token:<team_id>"
-/// The default workspace is stored with key "default"
-/// Workspace list is stored with key "workspaces"
+/// All state lives in one keyring item (`STORE_KEY`) as a single JSON blob,
+/// read once per process and cached. See the module docs for the rationale
+/// and the legacy migration path.
 pub struct KeyringStore;
 
 impl KeyringStore {
@@ -56,374 +97,281 @@ impl KeyringStore {
         })
     }
 
-    /// Store a token for a workspace
+    /// Load the consolidated blob, using the in-process cache when warm.
     ///
-    /// Stores the token and verifies it can be read back immediately.
-    /// Returns an error if storage or verification fails.
-    pub fn store_token(team_id: &str, token: &TokenSet) -> Result<()> {
-        let key = format!("token:{}", team_id);
-        debug!(team_id = team_id, key = key, "Storing token in keyring");
+    /// On a cold cache this performs a single keyring read. If the new blob is
+    /// absent it attempts a one-time migration from the legacy per-workspace
+    /// layout; if that yields nothing (or the backend is unavailable) it
+    /// returns an empty [`KeyringData`].
+    fn load() -> Result<KeyringData> {
+        let mut guard = cache()
+            .lock()
+            .map_err(|_| SlackError::Other("Failed to lock keyring cache".into()))?;
+        if let Some(data) = guard.as_ref() {
+            return Ok(data.clone());
+        }
 
-        let entry = Self::entry(&key)?;
-        let json = serde_json::to_string(token)?;
-        debug!(team_id = team_id, json_len = json.len(), "Serialized token");
+        let entry = Self::entry(STORE_KEY)?;
+        let data = match entry.get_password() {
+            Ok(json) => serde_json::from_str(&json)?,
+            Err(keyring::Error::NoEntry) => {
+                // No new-format blob yet: migrate any legacy entries once.
+                let migrated = Self::migrate_legacy().unwrap_or_default();
+                if !migrated.workspaces.is_empty() {
+                    // Persist the migrated blob FIRST so we never delete the
+                    // legacy entries without a durable copy. Only on a
+                    // successful write do we clean up the old per-workspace
+                    // items; if the write fails we leave the legacy layout
+                    // intact and retry on the next run.
+                    //
+                    // NOTE: we hold the cache lock here, so we call the
+                    // lock-free `write_entry` directly — `persist` would try to
+                    // re-lock the (non-reentrant) cache mutex and deadlock.
+                    match Self::write_entry(&migrated) {
+                        Ok(()) => Self::delete_legacy_entries(&migrated.workspaces),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to persist migrated keyring blob; keeping legacy entries");
+                        }
+                    }
+                }
+                migrated
+            }
+            Err(e) if backend_unavailable(&e) => {
+                warn!(
+                    service = SERVICE_NAME,
+                    key = STORE_KEY,
+                    error = %e,
+                    "Keyring backend unavailable; treating as empty store"
+                );
+                KeyringData::default()
+            }
+            Err(e) => {
+                error!(
+                    service = SERVICE_NAME,
+                    key = STORE_KEY,
+                    error = %e,
+                    "Failed to read keyring store"
+                );
+                return Err(SlackError::Keyring(e));
+            }
+        };
 
+        *guard = Some(data.clone());
+        Ok(data)
+    }
+
+    /// Write the blob to the keyring only (no cache interaction).
+    ///
+    /// A write failure is a hard error so a token is never silently dropped.
+    /// Callers that do not already hold the cache lock should use
+    /// [`Self::persist`] instead so the in-process cache stays consistent.
+    fn write_entry(data: &KeyringData) -> Result<()> {
+        let entry = Self::entry(STORE_KEY)?;
+        let json = serde_json::to_string(data)?;
         entry.set_password(&json).map_err(|e| {
             error!(
                 service = SERVICE_NAME,
-                key = key,
+                key = STORE_KEY,
                 error = %e,
-                "Failed to store token in keyring"
+                "Failed to write keyring store"
             );
             SlackError::Keyring(e)
-        })?;
-        debug!(team_id = team_id, "Token stored, verifying...");
+        })
+    }
 
-        // Add to workspace list
-        Self::add_to_workspace_list(team_id)?;
+    /// Serialize and write the blob, updating the in-process cache.
+    ///
+    /// Must NOT be called while holding the cache lock (the mutex is
+    /// non-reentrant); the cold-start migration path in [`Self::load`] writes
+    /// via [`Self::write_entry`] for that reason.
+    fn persist(data: &KeyringData) -> Result<()> {
+        Self::write_entry(data)?;
+        if let Ok(mut guard) = cache().lock() {
+            *guard = Some(data.clone());
+        }
+        Ok(())
+    }
 
-        // VERIFY: Read back the token to ensure it was stored
-        match Self::get_token(team_id)? {
-            Some(_) => {
-                debug!(team_id = team_id, "Token storage verified successfully");
-                Ok(())
-            }
-            None => {
-                error!(
-                    team_id = team_id,
-                    "Token storage verification failed - token could not be retrieved after storing"
-                );
-                Err(SlackError::Other(
-                    "Token storage verification failed - token could not be retrieved after storing. \
-                     This may be a keyring access issue.".into()
-                ))
+    /// Read, mutate, and persist the blob atomically under the cache lock-free
+    /// contract used elsewhere (load clones, we mutate the clone, then persist).
+    fn update<F>(f: F) -> Result<()>
+    where
+        F: FnOnce(&mut KeyringData),
+    {
+        let mut data = Self::load()?;
+        f(&mut data);
+        Self::persist(&data)
+    }
+
+    /// One-time migration from the legacy per-workspace layout
+    /// (`token:<team_id>` items plus `default` / `workspaces` items) into a
+    /// single [`KeyringData`] blob.
+    ///
+    /// This is the *only* path that still reads the old per-workspace items,
+    /// so it triggers the old multi-prompt behavior exactly once; afterwards
+    /// the consolidated blob is used and the legacy items are best-effort
+    /// deleted. Returns an empty value when there is nothing to migrate.
+    fn migrate_legacy() -> Result<KeyringData> {
+        // Legacy workspace list.
+        let ids: Vec<String> = match Self::entry(LEGACY_WORKSPACE_LIST_KEY)?.get_password() {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+            Err(keyring::Error::NoEntry) => Vec::new(),
+            Err(e) if backend_unavailable(&e) => return Ok(KeyringData::default()),
+            Err(e) => return Err(SlackError::Keyring(e)),
+        };
+        if ids.is_empty() {
+            return Ok(KeyringData::default());
+        }
+
+        debug!(
+            count = ids.len(),
+            "Migrating legacy keyring entries to blob"
+        );
+        let mut data = KeyringData::default();
+        for team_id in &ids {
+            let key = format!("token:{}", team_id);
+            match Self::entry(&key)?.get_password() {
+                Ok(json) => {
+                    if let Ok(token) = serde_json::from_str::<TokenSet>(&json) {
+                        data.tokens.insert(team_id.clone(), token);
+                        data.workspaces.push(team_id.clone());
+                    }
+                }
+                Err(keyring::Error::NoEntry) => {}
+                Err(e) if backend_unavailable(&e) => return Ok(KeyringData::default()),
+                Err(e) => return Err(SlackError::Keyring(e)),
             }
         }
+
+        // Legacy default.
+        if let Ok(default) = Self::entry(LEGACY_DEFAULT_KEY)?.get_password() {
+            if data.workspaces.contains(&default) {
+                data.default = Some(default);
+            }
+        }
+
+        Ok(data)
+    }
+
+    /// Best-effort deletion of the legacy per-workspace items after the
+    /// consolidated blob has been durably written. Failures are ignored: a
+    /// stray legacy item is harmless (the blob is authoritative) and will not
+    /// be re-migrated once the blob exists.
+    fn delete_legacy_entries(team_ids: &[String]) {
+        for team_id in team_ids {
+            if let Ok(entry) = Self::entry(&format!("token:{}", team_id)) {
+                let _ = entry.delete_credential();
+            }
+        }
+        if let Ok(entry) = Self::entry(LEGACY_DEFAULT_KEY) {
+            let _ = entry.delete_credential();
+        }
+        if let Ok(entry) = Self::entry(LEGACY_WORKSPACE_LIST_KEY) {
+            let _ = entry.delete_credential();
+        }
+    }
+
+    /// Store a token for a workspace
+    ///
+    /// Inserts the token into the consolidated blob (appending to the
+    /// workspace ordering if new) and persists it.
+    pub fn store_token(team_id: &str, token: &TokenSet) -> Result<()> {
+        debug!(team_id = team_id, "Storing token in keyring blob");
+        let token = token.clone();
+        let team_id_owned = team_id.to_string();
+        Self::update(move |data| {
+            data.tokens.insert(team_id_owned.clone(), token);
+            if !data.workspaces.contains(&team_id_owned) {
+                data.workspaces.push(team_id_owned);
+            }
+        })
     }
 
     /// Get token for a workspace
     pub fn get_token(team_id: &str) -> Result<Option<TokenSet>> {
-        let key = format!("token:{}", team_id);
-        debug!(team_id = team_id, key = key, "Getting token from keyring");
-        let entry = Self::entry(&key)?;
-
-        match entry.get_password() {
-            Ok(json) => {
-                debug!(
-                    team_id = team_id,
-                    json_len = json.len(),
-                    "Retrieved token from keyring"
-                );
-                let token: TokenSet = serde_json::from_str(&json)?;
-                Ok(Some(token))
-            }
-            Err(keyring::Error::NoEntry) => {
-                debug!(team_id = team_id, "No token found in keyring");
-                Ok(None)
-            }
-            Err(e) if backend_unavailable(&e) => {
-                warn!(
-                    service = SERVICE_NAME,
-                    key = key,
-                    error = %e,
-                    "Keyring backend unavailable; treating as no stored token"
-                );
-                Ok(None)
-            }
-            Err(e) => {
-                error!(
-                    service = SERVICE_NAME,
-                    key = key,
-                    error = %e,
-                    "Failed to get token from keyring"
-                );
-                Err(SlackError::Keyring(e))
-            }
-        }
+        debug!(team_id = team_id, "Getting token from keyring blob");
+        Ok(Self::load()?.tokens.get(team_id).cloned())
     }
 
     /// Delete token for a workspace
     pub fn delete_token(team_id: &str) -> Result<()> {
-        let key = format!("token:{}", team_id);
-        debug!(team_id = team_id, key = key, "Deleting token from keyring");
-        let entry = Self::entry(&key)?;
-
-        match entry.delete_credential() {
-            Ok(()) => {
-                debug!(team_id = team_id, "Token deleted from keyring");
-                // Remove from workspace list
-                Self::remove_from_workspace_list(team_id)?;
-
-                // If this was the default, clear the default
-                if let Ok(Some(default)) = Self::get_default() {
-                    if default == team_id {
-                        let _ = Self::clear_default();
-                    }
-                }
-
-                Ok(())
+        debug!(team_id = team_id, "Deleting token from keyring blob");
+        Self::update(|data| {
+            data.tokens.remove(team_id);
+            data.workspaces.retain(|id| id != team_id);
+            if data.default.as_deref() == Some(team_id) {
+                data.default = None;
             }
-            Err(keyring::Error::NoEntry) => {
-                debug!(team_id = team_id, "Token already deleted (no entry)");
-                Ok(())
-            }
-            Err(e) => {
-                error!(
-                    service = SERVICE_NAME,
-                    key = key,
-                    error = %e,
-                    "Failed to delete token from keyring"
-                );
-                Err(SlackError::Keyring(e))
-            }
-        }
+        })
     }
 
     /// Set the default workspace
-    ///
-    /// Sets the default and verifies it can be read back.
     pub fn set_default(team_id: &str) -> Result<()> {
-        debug!(team_id = team_id, "Setting default workspace in keyring");
-        let entry = Self::entry(DEFAULT_KEY)?;
-        entry.set_password(team_id).map_err(|e| {
-            error!(
-                service = SERVICE_NAME,
-                key = DEFAULT_KEY,
-                error = %e,
-                "Failed to set default workspace in keyring"
-            );
-            SlackError::Keyring(e)
-        })?;
-
-        // VERIFY: Read back to ensure it was stored
-        match Self::get_default()? {
-            Some(stored) if stored == team_id => {
-                debug!(team_id = team_id, "Default workspace set and verified");
-                Ok(())
-            }
-            Some(stored) => {
-                error!(
-                    expected = team_id,
-                    actual = stored,
-                    "Default workspace verification failed - stored value doesn't match"
-                );
-                Err(SlackError::Other(
-                    "Default workspace verification failed - stored value doesn't match".into(),
-                ))
-            }
-            None => {
-                error!(
-                    team_id = team_id,
-                    "Default workspace verification failed - could not be retrieved after storing"
-                );
-                Err(SlackError::Other(
-                    "Default workspace verification failed - could not be retrieved after storing"
-                        .into(),
-                ))
-            }
-        }
+        debug!(
+            team_id = team_id,
+            "Setting default workspace in keyring blob"
+        );
+        let team_id_owned = team_id.to_string();
+        Self::update(move |data| {
+            data.default = Some(team_id_owned);
+        })
     }
 
     /// Get the default workspace
     pub fn get_default() -> Result<Option<String>> {
-        debug!("Getting default workspace from keyring");
-        let entry = Self::entry(DEFAULT_KEY)?;
-
-        match entry.get_password() {
-            Ok(team_id) => {
-                debug!(
-                    team_id = team_id,
-                    "Retrieved default workspace from keyring"
-                );
-                Ok(Some(team_id))
-            }
-            Err(keyring::Error::NoEntry) => {
-                debug!("No default workspace set in keyring");
-                Ok(None)
-            }
-            Err(e) if backend_unavailable(&e) => {
-                warn!(
-                    service = SERVICE_NAME,
-                    key = DEFAULT_KEY,
-                    error = %e,
-                    "Keyring backend unavailable; treating as no default workspace"
-                );
-                Ok(None)
-            }
-            Err(e) => {
-                error!(
-                    service = SERVICE_NAME,
-                    key = DEFAULT_KEY,
-                    error = %e,
-                    "Failed to get default workspace from keyring"
-                );
-                Err(SlackError::Keyring(e))
-            }
-        }
+        debug!("Getting default workspace from keyring blob");
+        Ok(Self::load()?.default)
     }
 
     /// Clear the default workspace
     pub fn clear_default() -> Result<()> {
-        debug!("Clearing default workspace from keyring");
-        let entry = Self::entry(DEFAULT_KEY)?;
-
-        match entry.delete_credential() {
-            Ok(()) => {
-                debug!("Default workspace cleared from keyring");
-                Ok(())
-            }
-            Err(keyring::Error::NoEntry) => {
-                debug!("Default workspace already cleared (no entry)");
-                Ok(())
-            }
-            Err(e) => {
-                error!(
-                    service = SERVICE_NAME,
-                    key = DEFAULT_KEY,
-                    error = %e,
-                    "Failed to clear default workspace from keyring"
-                );
-                Err(SlackError::Keyring(e))
-            }
-        }
+        debug!("Clearing default workspace from keyring blob");
+        Self::update(|data| {
+            data.default = None;
+        })
     }
 
     /// List all stored workspaces
     ///
-    /// Returns a list of team IDs that have stored tokens.
-    /// This uses a separate keyring entry to track the list since
-    /// keyring APIs don't support enumeration on all platforms.
+    /// Returns the team IDs of all stored workspaces, in insertion order.
     pub fn list_workspaces() -> Result<Vec<String>> {
-        debug!("Listing workspaces from keyring");
-        let entry = Self::entry(WORKSPACE_LIST_KEY)?;
-
-        match entry.get_password() {
-            Ok(json) => {
-                let list: Vec<String> = serde_json::from_str(&json)?;
-                debug!(count = list.len(), "Retrieved workspace list from keyring");
-                Ok(list)
-            }
-            Err(keyring::Error::NoEntry) => {
-                debug!("No workspace list found in keyring");
-                Ok(vec![])
-            }
-            Err(e) if backend_unavailable(&e) => {
-                warn!(
-                    service = SERVICE_NAME,
-                    key = WORKSPACE_LIST_KEY,
-                    error = %e,
-                    "Keyring backend unavailable; treating as empty workspace list"
-                );
-                Ok(vec![])
-            }
-            Err(e) => {
-                error!(
-                    service = SERVICE_NAME,
-                    key = WORKSPACE_LIST_KEY,
-                    error = %e,
-                    "Failed to get workspace list from keyring"
-                );
-                Err(SlackError::Keyring(e))
-            }
-        }
-    }
-
-    /// Add a workspace to the list
-    fn add_to_workspace_list(team_id: &str) -> Result<()> {
-        debug!(team_id = team_id, "Adding workspace to list");
-        let mut list = Self::list_workspaces()?;
-
-        if !list.contains(&team_id.to_string()) {
-            list.push(team_id.to_string());
-            Self::save_workspace_list(&list)?;
-        } else {
-            debug!(team_id = team_id, "Workspace already in list");
-        }
-
-        Ok(())
-    }
-
-    /// Remove a workspace from the list
-    fn remove_from_workspace_list(team_id: &str) -> Result<()> {
-        debug!(team_id = team_id, "Removing workspace from list");
-        let mut list = Self::list_workspaces()?;
-
-        if let Some(pos) = list.iter().position(|x| x == team_id) {
-            list.remove(pos);
-            Self::save_workspace_list(&list)?;
-            debug!(team_id = team_id, "Workspace removed from list");
-        } else {
-            debug!(team_id = team_id, "Workspace not in list");
-        }
-
-        Ok(())
-    }
-
-    /// Save the workspace list
-    ///
-    /// Saves the list and verifies it can be read back.
-    fn save_workspace_list(list: &[String]) -> Result<()> {
-        debug!(count = list.len(), "Saving workspace list to keyring");
-        let entry = Self::entry(WORKSPACE_LIST_KEY)?;
-        let json = serde_json::to_string(list)?;
-        entry.set_password(&json).map_err(|e| {
-            error!(
-                service = SERVICE_NAME,
-                key = WORKSPACE_LIST_KEY,
-                error = %e,
-                "Failed to save workspace list to keyring"
-            );
-            SlackError::Keyring(e)
-        })?;
-
-        // VERIFY: Read back to ensure it was stored
-        let stored = Self::list_workspaces()?;
-        if stored.len() == list.len() && stored.iter().all(|id| list.contains(id)) {
-            debug!(count = list.len(), "Workspace list saved and verified");
-            Ok(())
-        } else {
-            error!(
-                expected = list.len(),
-                actual = stored.len(),
-                "Workspace list verification failed"
-            );
-            Err(SlackError::Other(
-                "Workspace list verification failed - stored list doesn't match".into(),
-            ))
-        }
+        debug!("Listing workspaces from keyring blob");
+        Ok(Self::load()?.workspaces)
     }
 
     /// Get the token for the default workspace, or the first available workspace
     pub fn get_default_or_first() -> Result<Option<TokenSet>> {
-        // Try default first
-        if let Some(default_id) = Self::get_default()? {
-            if let Some(token) = Self::get_token(&default_id)? {
-                return Ok(Some(token));
+        let data = Self::load()?;
+
+        // Try the default first.
+        if let Some(default_id) = data.default.as_ref() {
+            if let Some(token) = data.tokens.get(default_id) {
+                return Ok(Some(token.clone()));
             }
         }
 
-        // Fall back to first workspace in list
-        let workspaces = Self::list_workspaces()?;
-        if let Some(first) = workspaces.first() {
-            return Self::get_token(first);
+        // Fall back to the first workspace in the list.
+        if let Some(first) = data.workspaces.first() {
+            return Ok(data.tokens.get(first).cloned());
         }
 
         Ok(None)
     }
 
-    /// Get workspace info (team_id, team_name) for all stored workspaces
+    /// Get workspace info (team_id, team_name, domain, type) for all stored
+    /// workspaces. Reads the blob once — no per-workspace keyring access.
     pub fn get_workspace_info() -> Result<Vec<WorkspaceInfo>> {
-        let team_ids = Self::list_workspaces()?;
-        let default = Self::get_default()?;
+        let data = Self::load()?;
+        let default = data.default.as_ref();
 
         let mut info = Vec::new();
-        for team_id in team_ids {
-            if let Some(token) = Self::get_token(&team_id)? {
+        for team_id in &data.workspaces {
+            if let Some(token) = data.tokens.get(team_id) {
                 info.push(WorkspaceInfo {
-                    team_id: token.team_id,
-                    team_name: token.team_name,
-                    team_domain: token.team_domain,
-                    is_default: default.as_ref() == Some(&team_id),
+                    team_id: token.team_id.clone(),
+                    team_name: token.team_name.clone(),
+                    team_domain: token.team_domain.clone(),
+                    is_default: default == Some(team_id),
                     token_type: format!("{:?}", token.token_type),
                 });
             }
@@ -471,10 +419,32 @@ mod tests {
     }
 
     #[test]
-    fn test_token_key_format() {
-        let team_id = "T12345";
-        let key = format!("token:{}", team_id);
-        assert_eq!(key, "token:T12345");
+    fn test_store_key_is_singular() {
+        // The whole point of the single-blob layout: one keyring item.
+        assert_eq!(STORE_KEY, "store");
+    }
+
+    #[test]
+    fn test_keyring_data_blob_roundtrips() {
+        // A KeyringData blob with multiple workspaces survives a JSON round
+        // trip with tokens, default, and ordering intact — this is the single
+        // value read from (and written to) the one keyring item.
+        let mut data = KeyringData::default();
+        data.tokens
+            .insert("T1".into(), create_test_token("T1", "One"));
+        data.tokens
+            .insert("T2".into(), create_test_token("T2", "Two"));
+        data.workspaces = vec!["T1".into(), "T2".into()];
+        data.default = Some("T2".into());
+
+        let json = serde_json::to_string(&data).unwrap();
+        let back: KeyringData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.workspaces, vec!["T1".to_string(), "T2".to_string()]);
+        assert_eq!(back.default.as_deref(), Some("T2"));
+        assert_eq!(back.tokens.len(), 2);
+        assert_eq!(back.tokens["T1"].team_name, "One");
+        assert_eq!(back.tokens["T2"].access_token, "xoxp-test-T2");
     }
 
     #[test]
