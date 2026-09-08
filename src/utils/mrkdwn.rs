@@ -243,8 +243,10 @@ fn convert_inline(s: &str) -> String {
                         i = close + 2;
                         continue;
                     }
-                    out.push('_');
-                    i += 1;
+                    // Unmatched `__`: emit both underscores literally so the
+                    // second one isn't re-parsed as an italic opener.
+                    out.push_str("__");
+                    i += 2;
                 } else {
                     // _italic_ is already mrkdwn; copy through the closing `_`.
                     if let Some(close) = find_byte(b, i + 1, b'_') {
@@ -267,8 +269,10 @@ fn convert_inline(s: &str) -> String {
                         i = close + 2;
                         continue;
                     }
-                    out.push('~');
-                    i += 1;
+                    // Unmatched `~~`: emit both tildes literally so the second
+                    // one isn't re-parsed as a strikethrough opener.
+                    out.push_str("~~");
+                    i += 2;
                 } else if let Some(close) = find_byte(b, i + 1, b'~') {
                     out.push_str(&s[i..=close]);
                     i = close + 1;
@@ -620,6 +624,18 @@ mod tests {
             markdown_to_mrkdwn("[Topic](https://en.wikipedia.org/wiki/Topic_(disambiguation))"),
             "<https://en.wikipedia.org/wiki/Topic_(disambiguation)|Topic>"
         );
+    }
+
+    #[test]
+    fn unmatched_double_underscore_and_tilde_stay_literal() {
+        // `__foo_bar`: the unmatched `__` must not leave its second `_` to
+        // pair with the one in `foo_bar` and create a spurious italic span.
+        assert_eq!(markdown_to_mrkdwn("__foo_bar"), "__foo_bar");
+        // `~~a~b`: likewise for strikethrough.
+        assert_eq!(markdown_to_mrkdwn("~~a~b"), "~~a~b");
+        // Matched pairs still convert.
+        assert_eq!(markdown_to_mrkdwn("__bold__"), "*bold*");
+        assert_eq!(markdown_to_mrkdwn("~~strike~~"), "~strike~");
     }
 
     #[test]
