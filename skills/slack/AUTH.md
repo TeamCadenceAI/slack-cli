@@ -2,6 +2,18 @@
 
 Authentication and workspace management.
 
+## Quick start — file-based token store
+
+The CLI defaults to the **system keyring**. If you're on a machine where the keyring
+isn't set up (or `slack auth list` returns `[]`), switch to file-based storage first:
+
+```bash
+export SLACK_TOKEN_STORE_PATH=~/.slack/tokens.json
+```
+
+Set this in your shell before running any `slack` command, or add it to `~/.zshrc` /
+`~/.bashrc`. The file is created automatically on first `auth add`.
+
 ## Add a workspace
 
 ```bash
@@ -96,4 +108,10 @@ slack auth remove T1234567890     # remove a workspace (team ID or domain)
 |----------|---------|
 | `SLACK_TOKEN` | Override token for all commands |
 | `SLACK_WORKSPACE` | Default workspace (team ID or domain, same as `-w`) |
-| `SLACK_TOKEN_STORE_PATH` | Use a JSON file instead of system keyring |
+| `SLACK_TOKEN_STORE_PATH` | Use a JSON file instead of system keyring (set this first if the keyring is unavailable) |
+
+## Diagnosing auth issues
+
+- `slack auth list` returns `[]` → you're on the keyring backend and no tokens are stored there. Set `SLACK_TOKEN_STORE_PATH` and try again.
+- `auth_required` error → same root cause — CLI can't find a token. Check the store path.
+- Browser token added but commands fail → verify both `--xoxc` and `--xoxd` were provided; the `d` cookie must include the `xoxd-` prefix.

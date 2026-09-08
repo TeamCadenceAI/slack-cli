@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-08
+
 ### Added
 
+- **Markdown → Slack mrkdwn on `messages send`**: message bodies written in
+  standard Markdown are now converted to Slack's mrkdwn dialect before sending
+  (closes #1). Handles bold (`**b**`/`__b__` → `*b*`), italic (`*i*` → `_i_`),
+  strikethrough (`~~s~~` → `~s~`), headings, links (`[t](url)` → `<url|t>`),
+  and lists. Existing mrkdwn spans, code spans, and mentions/links are
+  preserved verbatim so nothing is double-encoded.
+- **Select a workspace by team ID or domain (`-w` / `SLACK_WORKSPACE`)**: the
+  `-w <workspace>` flag and `SLACK_WORKSPACE` env var now match a stored
+  workspace by its **team ID** (`T04U8BDD0KC`) or its **domain/subdomain**
+  (`cadence-app`, `cadence-app.slack.com`). Team names are intentionally not
+  matched (too volatile). `auth switch`/`auth remove` accept the same
+  selectors, and `auth list` gained a `domain` column (and `team_domain` in
+  JSON).
 - **Import from locally logged-in Slack (`slack auth add <subdomain>`)**: given
   just a workspace subdomain or URL (e.g. `slack auth add onlinegeniuses` or
   `onlinegeniuses.slack.com`), the CLI extracts the `xoxc` token and shared
@@ -30,6 +45,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps both `Slack Key` and `Slack App Store Key`); the importer now derives a
   key from each candidate account and uses whichever decrypts a valid `xoxd-`
   value, fixing imports from the live direct-download desktop app.
+
+### Fixed
+
+- **mrkdwn converter edge cases** (review follow-ups): space-flanked single
+  asterisks (`a * b * c`) are no longer treated as italics (simplified
+  CommonMark flanking rules); angle brackets are only preserved verbatim when
+  they hold a real mrkdwn span (mention or scheme URL), so comparisons like
+  `x < 5 and **bold** > 2` still convert; markdown link URLs containing
+  balanced parentheses (e.g. Wikipedia `..._(disambiguation)` links) are no
+  longer truncated; and unmatched `**`/`__`/`~~` delimiters are emitted
+  literally instead of forming spurious spans.
+- **`files.list` integration test** matched a JSON request body but Web API
+  requests are form-encoded, so the mock never matched and the test failed
+  under `SLACK_INTEGRATION_TESTS=1` (CI). Switched to a URL-encoded body
+  matcher.
+
+### Changed
+
+- Cross-platform hygiene for the credential importer: macOS-only browser/
+  profile discovery items are gated so Linux/Windows builds are free of
+  dead-code warnings under `-D warnings`, and rustdoc intra-doc links were
+  fixed so the documentation build passes with `-D warnings`.
 
 ## [0.1.2] - 2026-08-18
 
@@ -172,7 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows for testing and releases
 - No external config files required
 
-[Unreleased]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TeamCadenceAI/slack-cli/releases/tag/v0.1.0

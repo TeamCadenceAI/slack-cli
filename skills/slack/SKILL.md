@@ -24,6 +24,20 @@ command -v slack >/dev/null 2>&1 || echo "NOT INSTALLED"
 If not installed, tell the user to install the Slack CLI from:
 https://github.com/TeamCadenceAI/slack-cli
 
+## Token store setup (required if not using system keyring)
+
+By default the CLI stores tokens in the system keyring. If the keyring is unavailable
+or `slack auth list` returns `[]` despite tokens being present, the CLI is using the
+keyring backend and can't find anything. Switch to file-based storage:
+
+```bash
+export SLACK_TOKEN_STORE_PATH=~/.slack/tokens.json
+```
+
+Set this **before every `slack` command** in the session, or add it to `~/.zshrc` /
+`~/.bashrc`. Without it, auth commands will appear to succeed but list nothing.
+See [AUTH.md](AUTH.md) for full details.
+
 ## Output
 
 Output is **JSON by default** — ideal for parsing and automation. Use `--plain` for TSV output.
@@ -141,6 +155,12 @@ slack messages list "#general"
 
 # Last 7 days
 slack messages list "#general" --limit 7d
+
+# Fetch a single message by permalink URL (most reliable)
+slack messages get "https://workspace.slack.com/archives/C123/p1234567890123456"
+
+# Read a thread
+slack messages thread C1234567890 1234567890.123456
 
 # Search
 slack messages search "deploy failed" --in-channel "#ops"
