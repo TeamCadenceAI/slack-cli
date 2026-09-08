@@ -15,7 +15,7 @@
 //! 4. Newer Chromium builds additionally prepend a 32-byte SHA-256 domain hash
 //!    to the plaintext, which must be stripped to recover the raw cookie value.
 //!
-//! Only [`safe_storage_key`] is macOS-specific (it shells out to the system
+//! Only [`safe_storage_keys`] is macOS-specific (it shells out to the system
 //! `security` tool to read the Keychain, avoiding an extra dependency). The pure
 //! AES/PKCS#7 logic in [`decrypt_cookie_value`] is platform independent so it can
 //! be unit-tested everywhere.
@@ -59,7 +59,7 @@ const AES_KEY_LEN: usize = 16;
 /// Derive every candidate AES key that might decrypt a profile's cookie values.
 ///
 /// On macOS a `"<App> Safe Storage"` service can contain more than one generic
-/// password (see [`KNOWN_SAFE_STORAGE_ACCOUNTS`]). Because
+/// password (see `KNOWN_SAFE_STORAGE_ACCOUNTS`). Because
 /// `security find-generic-password -s <service> -w` without an explicit account
 /// returns only the *first* match — which is frequently the wrong one (e.g. a
 /// stale Mac App Store key) — this queries each known account by name as well
@@ -169,7 +169,7 @@ fn derive_key(password: &[u8]) -> Vec<u8> {
 ///
 /// The `encrypted_value` must start with the `b"v10"` marker. The remaining
 /// bytes are decrypted with AES-128-CBC (IV = sixteen spaces) using the 16-byte
-/// `key` from [`safe_storage_key`], PKCS#7 padding is removed, and — if the
+/// `key` from [`safe_storage_keys`], PKCS#7 padding is removed, and — if the
 /// resulting text does not already begin with `xoxd-` — a leading 32-byte
 /// SHA-256 domain-hash prefix is stripped before the value is decoded as UTF-8.
 ///

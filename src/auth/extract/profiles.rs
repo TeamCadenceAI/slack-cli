@@ -31,6 +31,10 @@ pub struct BrowserProfile {
 }
 
 /// Static description of a supported Chromium-based application.
+///
+/// Only consumed by the macOS discovery path and the unit tests; on other
+/// targets the whole browser-spec table is currently unused.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct BrowserSpec {
     /// Display name emitted in [`BrowserProfile::browser`].
     name: &'static str,
@@ -44,6 +48,7 @@ struct BrowserSpec {
 }
 
 /// The set of macOS applications we know how to enumerate.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const BROWSER_SPECS: &[BrowserSpec] = &[
     BrowserSpec {
         name: "Chrome",
@@ -87,6 +92,7 @@ const BROWSER_SPECS: &[BrowserSpec] = &[
 ///
 /// The filter is a case-insensitive substring match on the browser name. A
 /// `None` filter matches everything.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn browser_matches_filter(name: &str, filter: Option<&str>) -> bool {
     match filter {
         None => true,
