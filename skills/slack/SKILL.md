@@ -4,6 +4,7 @@ description: Send and read Slack messages, search conversations, manage channels
 license: MIT
 compatibility: Requires the slack CLI. If not installed, direct the user to https://github.com/TeamCadenceAI/slack-cli
 allowed-tools: Bash(slack:*) Bash(jq:*)
+disable-model-invocation: true
 ---
 
 # slack
