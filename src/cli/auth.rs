@@ -608,8 +608,11 @@ async fn run_discover(
     let discovered = discover_workspaces(browser.as_deref());
 
     // When --check is requested, extract full credentials once and auth_test
-    // each, keyed by team domain/id so we can annotate the discovery list.
+    // each, keyed by team domain/id so we can annotate the discovery list with
+    // both liveness and the *authoritative* team name from auth.test (which
+    // supersedes the best-effort name recovered from local storage).
     let mut live: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut auth_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if check {
         let extracted = extract_workspaces(&ExtractOptions {
             url: None,
@@ -617,11 +620,25 @@ async fn run_discover(
         })
         .unwrap_or_default();
         for ws in &extracted {
-            let ok = store_browser_tokens(&ws.tokens.xoxc, &ws.tokens.xoxd)
-                .await
-                .is_ok();
-            if let Some(key) = ws.team_id.clone().or_else(|| ws.team_domain.clone()) {
-                live.insert(key, ok);
+            let result = store_browser_tokens(&ws.tokens.xoxc, &ws.tokens.xoxd).await;
+            let keys: Vec<String> = ws
+                .team_id
+                .iter()
+                .chain(ws.team_domain.iter())
+                .cloned()
+                .collect();
+            match result {
+                Ok(info) => {
+                    for key in &keys {
+                        live.insert(key.clone(), true);
+                        auth_name.insert(key.clone(), info.team.clone());
+                    }
+                }
+                Err(_) => {
+                    for key in &keys {
+                        live.entry(key.clone()).or_insert(false);
+                    }
+                }
             }
         }
     }
@@ -637,13 +654,27 @@ async fn run_discover(
             .or(Some(false))
     };
 
+    // Prefer the authoritative auth.test name (when checked), else the
+    // locally-recovered name.
+    let name_for = |team_id: &Option<String>,
+                    domain: &Option<String>,
+                    local: &Option<String>|
+     -> Option<String> {
+        team_id
+            .as_ref()
+            .and_then(|id| auth_name.get(id).cloned())
+            .or_else(|| domain.as_ref().and_then(|d| auth_name.get(d).cloned()))
+            .or_else(|| local.clone())
+    };
+
     if output_mode == crate::output::OutputMode::Plain {
         for ws in &discovered {
+            let name = name_for(&ws.team_id, &ws.team_domain, &ws.team_name);
             let base = format!(
                 "{}\t{}\t{}\t{}",
                 ws.team_domain.as_deref().unwrap_or(""),
                 ws.team_id.as_deref().unwrap_or(""),
-                ws.team_name.as_deref().unwrap_or(""),
+                name.as_deref().unwrap_or(""),
                 ws.source,
             );
             match live_for(&ws.team_id, &ws.team_domain) {
@@ -655,10 +686,11 @@ async fn run_discover(
         let rows: Vec<serde_json::Value> = discovered
             .iter()
             .map(|ws| {
+                let name = name_for(&ws.team_id, &ws.team_domain, &ws.team_name);
                 let mut obj = serde_json::json!({
                     "team_id": ws.team_id,
                     "team_domain": ws.team_domain,
-                    "team_name": ws.team_name,
+                    "team_name": name,
                     "source": ws.source,
                 });
                 if let Some(ok) = live_for(&ws.team_id, &ws.team_domain) {

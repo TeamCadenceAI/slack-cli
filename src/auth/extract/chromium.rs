@@ -66,8 +66,18 @@ pub fn extract_tokens_from_leveldb(leveldb_dir: &Path) -> Result<Vec<TeamToken>>
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file())
         .collect();
-    // Deterministic ordering keeps merge results stable across runs.
-    files.sort();
+    // Process newest files first so the most recent write of a value wins.
+    // LevelDB keeps superseded values in older SSTables until compaction, so a
+    // renamed workspace (e.g. "Cadence" -> "antiburn") can appear twice; the
+    // freshest write is authoritative. We order by last-modified time
+    // (descending), falling back to the filename so ordering stays
+    // deterministic when timestamps tie or are unavailable.
+    files.sort_by(|a, b| {
+        let mtime = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        mtime(b)
+            .cmp(&mtime(a))
+            .then_with(|| b.file_name().cmp(&a.file_name()))
+    });
 
     for path in files {
         let ext = path
@@ -594,6 +604,57 @@ mod tests {
         assert_eq!(tokens[1].domain.as_deref(), Some("beta"));
         assert_eq!(tokens[1].name.as_deref(), Some("Beta Inc"));
         assert_eq!(tokens[1].team_id.as_deref(), Some("T9999ZZZZ"));
+    }
+
+    #[test]
+    fn newest_file_wins_for_renamed_workspace() {
+        use std::time::{Duration, SystemTime};
+        // Same team_id with two tokens/names across two files: a stale write
+        // and a newer one, mirroring a workspace rename LevelDB has not yet
+        // compacted. The newest file must be parsed first so the current record
+        // (here "antiburn") leads and downstream team_id dedup keeps it.
+        let old_json = concat!(
+            "{\"teams\":{\"T04U8BDD0KC\":{\"name\":\"Cadence\",",
+            "\"domain\":\"cadence-app\",\"token\":\"xoxc-100-200-300-oldstaletoken\"}}}"
+        );
+        let new_json = concat!(
+            "{\"teams\":{\"T04U8BDD0KC\":{\"name\":\"antiburn\",",
+            "\"domain\":\"cadence-app\",\"token\":\"xoxc-100-200-400-freshlivetoken\"}}}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut old_buf = b"\x00\x00localConfig_v2".to_vec();
+        old_buf.extend_from_slice(old_json.as_bytes());
+        let old_path = dir.path().join("000005.ldb");
+        fs::write(&old_path, &old_buf).unwrap();
+
+        let mut new_buf = b"\x00\x00localConfig_v2".to_vec();
+        new_buf.extend_from_slice(new_json.as_bytes());
+        let new_path = dir.path().join("000009.ldb");
+        fs::write(&new_path, &new_buf).unwrap();
+
+        // Make the stale file the OLDER one by mtime (std, no extra deps).
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&old_path)
+            .unwrap()
+            .set_modified(base)
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&new_path)
+            .unwrap()
+            .set_modified(base + Duration::from_secs(3600))
+            .unwrap();
+
+        let tokens = extract_tokens_from_leveldb(dir.path()).unwrap();
+        // Both tokens are recovered (different xoxc values, so no merge)...
+        assert_eq!(tokens.len(), 2);
+        // ...but the freshest write leads, so a first-seen dedup by team_id
+        // keeps "antiburn".
+        assert_eq!(tokens[0].name.as_deref(), Some("antiburn"));
+        assert_eq!(tokens[0].xoxc, "xoxc-100-200-400-freshlivetoken");
     }
 
     #[test]
