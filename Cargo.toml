@@ -70,6 +70,22 @@ open = "5"
 # Local HTTP server for OAuth callback
 tiny_http = "0.12"
 
+# --- Native browser/desktop token extraction (`auth add --from-browser`) ---
+# Read the browser "Cookies" SQLite DB directly. `bundled` compiles SQLite
+# from source so we don't depend on a system libsqlite3 being present on any
+# build/target host (matches our static musl release targets).
+rusqlite = { version = "0.31", features = ["bundled"] }
+# Snappy-decompress LevelDB data blocks in the browser's Local Storage.
+snap = "1"
+# AES-128-CBC decryption of the Chromium `v10` encrypted cookie value.
+aes = "0.8"
+cbc = "0.1"
+# Derive the AES key from the Keychain "Safe Storage" password:
+# PBKDF2-HMAC-SHA1(pw, "saltysalt", 1003, 16). default-features off keeps it lean.
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac = "0.12"
+sha1 = "0.10"
+
 # --- Platform-specific keyring backends ---
 # Backend features are gated per-OS so each release target only pulls the
 # credential store it can actually use.

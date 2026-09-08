@@ -1,9 +1,10 @@
 ---
 name: slack
-description: Send and read Slack messages, search conversations, manage channels, users, files, reactions, status, and reminders. Use when the user wants to interact with Slack — post a message, check recent messages, search for something, or manage their workspace.
+description: Send and read Slack messages, search conversations, manage channels, users, files, reactions, status, and reminders across multiple workspaces. Use when the user wants to interact with Slack — post a message, check recent messages, search for something, or work with a specific workspace/team by name. Can discover and connect workspaces the user is already signed into locally (desktop app or browser).
 license: MIT
 compatibility: Requires the slack CLI. If not installed, direct the user to https://github.com/TeamCadenceAI/slack-cli
 allowed-tools: Bash(slack:*) Bash(jq:*)
+disable-model-invocation: true
 ---
 
 # slack
@@ -39,23 +40,69 @@ Output is **JSON by default** — ideal for parsing and automation. Use `--plain
 ## Authentication
 
 ```bash
-# Add a token
-slack auth add --token xoxp-your-token
+# Import a workspace you're already signed into locally (Slack desktop app or a
+# browser) - no manual token copying. Give just the subdomain or full URL:
+slack auth add onlinegeniuses
+slack auth add onlinegeniuses.slack.com
 
-# Add browser tokens (xoxc + xoxd cookie)
+# Discover which workspaces are signed into local apps (local read only)
+slack auth discover
+
+# List authorized workspaces (add --check to verify each token is live)
+slack auth list
+slack auth list --check
+
+# Add a token / browser tokens directly
+slack auth add --token xoxp-your-token
 slack auth add --xoxc xoxc-... --xoxd xoxd-...
 
-# List authorized workspaces
-slack auth list
-
-# Check current auth
+# Check current auth / switch default workspace
 slack auth status
-
-# Switch default workspace
 slack auth switch T1234567890
 ```
 
 See [AUTH.md](AUTH.md) for full authentication reference.
+
+## Resolving a workspace by name (IMPORTANT for agents)
+
+When the user refers to a workspace by name ("check the latest posts from **Online
+Geniuses**"), do **not** assume it is connected. Resolve it in this order:
+
+1. **Check already-authorized workspaces.** `slack auth list` returns
+   `team_id`, `team_name`, and `token_type`. Match the user's name against
+   `team_name` (case-insensitive) or the team ID. If found, use its `team_id`
+   with `-w <team_id>` and proceed.
+2. **If not connected, discover local sessions.** `slack auth discover` lists
+   workspaces signed into the desktop app / browsers (metadata only, no network,
+   no Keychain). Match the user's name against `team_name` or `team_domain`.
+3. **If discoverable but not connected, ASK before connecting.** Tell the user:
+   *"'Online Geniuses' is signed into your Slack desktop app but not connected to
+   the CLI yet. Connect it?"* On yes, run `slack auth add <team_domain>`, then use
+   the returned `team_id`.
+4. **If not found anywhere,** say so and point them to `slack auth add` /
+   `slack auth discover`.
+
+```bash
+# Example: "check the 5 latest posts from Online Geniuses"
+
+# 1. Is it already connected? (match name -> team_id)
+slack auth list --plain | grep -i "online geniuses"
+
+# 2. Not connected -> is it available locally?
+slack auth discover --plain | grep -i "online geniuses"
+#   onlinegeniuses  T02LMATJK  Online Geniuses  Slack/Default
+
+# 3. With the user's OK, connect it (returns team_id T02LMATJK):
+slack auth add onlinegeniuses
+
+# 4. Now read from it via its team_id:
+slack -w T02LMATJK channels list --plain
+slack -w T02LMATJK messages list "#general" --limit 5
+```
+
+`auth discover` columns (`--plain`): `team_domain  team_id  team_name  source`
+(plus a `live` column when `--check` is passed). In JSON, each entry has
+`team_id`, `team_domain`, `team_name`, `source`.
 
 ## Common usage
 
@@ -107,7 +154,7 @@ slack status clear
 
 | File | Commands |
 |------|----------|
-| [AUTH.md](AUTH.md) | `auth add/list/remove/status/switch/browser-help` |
+| [AUTH.md](AUTH.md) | `auth add/discover/list/remove/status/switch/browser-help` |
 | [CHANNELS.md](CHANNELS.md) | `channels list/info/dms/export` |
 | [MESSAGES.md](MESSAGES.md) | `messages list/send/search/thread/get` |
 | [USERS.md](USERS.md) | `users list/info/me/export` |

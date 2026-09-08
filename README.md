@@ -93,8 +93,21 @@ slack auth add --token xoxb-...
 # Add browser token (xoxc + xoxd cookie)
 slack auth add --xoxc xoxc-... --xoxd xoxd-...
 
-# List configured workspaces
+# Import from a workspace you're already signed into locally (Slack desktop app
+# or a browser) - no manual token copying. Give just the subdomain or full URL:
+slack auth add onlinegeniuses
+slack auth add onlinegeniuses.slack.com
+slack auth add myteam --browser slack   # narrow the source app/browser
+
+# Discover which workspaces are signed into local apps (reads local storage
+# only - no Keychain access or network calls unless you pass --check)
+slack auth discover
+slack auth discover --browser slack
+slack auth discover --check            # also validate each token is live
+
+# List configured workspaces (add --check to verify each token via auth.test)
 slack auth list
+slack auth list --check
 
 # Show current auth status
 slack auth status

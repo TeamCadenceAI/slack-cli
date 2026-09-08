@@ -3,12 +3,17 @@
 //! Provides token types, validation, keyring storage, OAuth flow, and browser token support.
 
 pub mod browser;
+pub mod extract;
 pub mod oauth;
 mod storage;
 pub mod store;
 mod tokens;
 
 pub use browser::{print_extraction_instructions, BrowserTokens};
+pub use extract::{
+    discover_workspaces, extract_workspaces, DiscoveredWorkspace, ExtractOptions,
+    ExtractedWorkspace,
+};
 pub use oauth::{OAuthConfig, OAuthFlow, DEFAULT_SCOPES};
 pub use storage::{KeyringStore, WorkspaceInfo};
 pub use store::{

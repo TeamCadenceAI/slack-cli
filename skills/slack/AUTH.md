@@ -5,6 +5,13 @@ Authentication and workspace management.
 ## Add a workspace
 
 ```bash
+# Import from a locally logged-in Slack (desktop app or browser) - RECOMMENDED.
+# Give just the subdomain or the full URL. Extracts the xoxc token + xoxd cookie
+# for that workspace and authorizes it; no manual token copying.
+slack auth add onlinegeniuses
+slack auth add onlinegeniuses.slack.com
+slack auth add myteam --browser slack   # narrow the source app/browser
+
 # Direct token (user or bot)
 slack auth add --token xoxp-your-token
 slack auth add --token xoxb-your-bot-token
@@ -21,12 +28,38 @@ slack auth add --oauth --manual
 
 Run `slack auth browser-help` for step-by-step instructions on extracting browser tokens.
 
+`slack auth add <subdomain>` currently supports macOS (Chromium-family browsers
++ the Slack desktop app). It reads the workspace's locally-stored session, so
+you must already be signed into that workspace in one of those apps.
+
+## Discover local workspaces
+
+List the Slack workspaces signed into local apps (desktop app / browsers)
+**without** connecting them. This reads local storage only — no Keychain access,
+no cookie decryption, no network — unless you pass `--check`.
+
+```bash
+slack auth discover                  # all discoverable workspaces
+slack auth discover --browser slack  # only the Slack desktop app
+slack auth discover --check          # also validate each token is live (network)
+slack auth discover --plain          # TSV: team_domain  team_id  team_name  source
+```
+
+JSON output: `{ "workspaces": [ { team_id, team_domain, team_name, source[, live] } ], "count": N }`.
+
+Use this to resolve a workspace the user named but that is not connected yet,
+then `slack auth add <team_domain>` to connect it (ask the user first).
+
 ## List & inspect
 
 ```bash
-slack auth list       # all authorized workspaces
-slack auth status     # current workspace auth details
+slack auth list           # all authorized workspaces
+slack auth list --check   # + validate each token via auth.test (live/expired)
+slack auth status         # current workspace auth details
 ```
+
+`auth list --check` adds a `live` boolean (JSON) / trailing `live|expired`
+column (`--plain`) so you can tell which stored tokens still work.
 
 ## Switch & remove
 
@@ -41,7 +74,7 @@ slack auth remove T1234567890   # remove a workspace
 |--------|------|-------|
 | `xoxp-` | User OAuth | Full user access including search |
 | `xoxb-` | Bot | Limited — no search, no DMs |
-| `xoxc-` | Browser session | Requires `xoxd` cookie, full access |
+| `xoxc-` | Browser session | Requires `xoxd` cookie, full access. Auto-extracted by `auth add <subdomain>` / `auth discover`. |
 
 ## Environment variables
 
