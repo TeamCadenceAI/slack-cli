@@ -168,17 +168,21 @@ fn convert_inline(s: &str) -> String {
                     i += 1;
                 }
             }
-            // Existing angle-bracket span (<@U…>, <#C…>, <url|text>): copy
-            // verbatim so we never double-encode links/mentions.
-            b'<' => {
-                if let Some(close) = find_byte(b, i + 1, b'>') {
+            // Existing angle-bracket span (<@U…>, <#C…>, <!here>, <url|text>):
+            // copy verbatim so we never double-encode links/mentions. Only do
+            // so when the content actually looks like a mrkdwn span; otherwise
+            // (e.g. `x < 5 and **bold** > 2`) emit `<` literally and keep
+            // converting the text after it.
+            b'<' => match find_byte(b, i + 1, b'>') {
+                Some(close) if is_mrkdwn_span(&s[i + 1..close]) => {
                     out.push_str(&s[i..=close]);
                     i = close + 1;
-                } else {
+                }
+                _ => {
                     out.push('<');
                     i += 1;
                 }
-            }
+            },
             // Image: ![alt](url) -> <url|alt>
             b'!' if i + 1 < b.len() && b[i + 1] == b'[' => {
                 if let Some((text, url, next)) = parse_link(b, s, i + 1) {
@@ -211,9 +215,11 @@ fn convert_inline(s: &str) -> String {
                         i = close + 2;
                         continue;
                     }
-                    out.push('*');
-                    i += 1;
-                } else if let Some(close) = find_byte(b, i + 1, b'*') {
+                    // Unmatched `**`: emit both asterisks literally so the
+                    // second one isn't re-parsed as an italic opener.
+                    out.push_str("**");
+                    i += 2;
+                } else if let Some(close) = find_emphasis_close(b, i + 1) {
                     // *italic* -> _italic_
                     let inner = convert_inline(&s[i + 1..close]);
                     out.push('_');
@@ -294,7 +300,9 @@ fn parse_link(b: &[u8], s: &str, open: usize) -> Option<(String, String, usize)>
     if b.get(text_close + 1) != Some(&b'(') {
         return None;
     }
-    let url_close = find_byte(b, text_close + 2, b')')?;
+    // Find the `)` that matches the opening `(`, allowing balanced parens
+    // inside the URL (e.g. `…/wiki/Topic_(disambiguation)`).
+    let url_close = find_matching_paren(b, text_close + 1)?;
 
     let text = convert_inline(&s[open + 1..text_close]);
     let raw_url = s[text_close + 2..url_close].trim();
@@ -331,6 +339,76 @@ fn push_link(out: &mut String, url: &str, text: &str) {
 /// Find the next single byte `needle` at or after `from`.
 fn find_byte(b: &[u8], from: usize, needle: u8) -> Option<usize> {
     (from..b.len()).find(|&i| b[i] == needle)
+}
+
+/// Given the index of an opening `(`, return the index of its matching `)`,
+/// honoring nested/balanced parentheses. Returns `None` if unbalanced.
+fn find_matching_paren(b: &[u8], open_paren: usize) -> Option<usize> {
+    debug_assert_eq!(b[open_paren], b'(');
+    let mut depth = 0usize;
+    let mut i = open_paren;
+    while i < b.len() {
+        match b[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the closing `*` of a single-asterisk italic span opened at `open`
+/// (the index just past the opening `*`), applying simplified CommonMark
+/// "flanking" rules: the opener must not be followed by whitespace, and the
+/// closing `*` must not be preceded by whitespace and must not itself be part
+/// of a `**` pair. This prevents `a * b * c` from being read as emphasis.
+fn find_emphasis_close(b: &[u8], open: usize) -> Option<usize> {
+    // A left-flanking `*` cannot be immediately followed by whitespace.
+    if b.get(open).map_or(true, |&c| c.is_ascii_whitespace()) {
+        return None;
+    }
+    let mut i = open;
+    while i < b.len() {
+        if b[i] == b'*' {
+            // Skip `**` (bold) delimiters — not a single-emphasis closer.
+            if b.get(i + 1) == Some(&b'*') {
+                i += 2;
+                continue;
+            }
+            // A right-flanking `*` cannot be immediately preceded by whitespace.
+            if i > open && !b[i - 1].is_ascii_whitespace() {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Return `true` if the text between a `<` and `>` looks like an existing Slack
+/// mrkdwn span that must be preserved verbatim: a user/channel mention
+/// (`@U…`/`#C…`), a special mention (`!here`/`!channel`/`!subteam…`), or a
+/// link with a URL scheme (`http:`, `https:`, `mailto:`, `tel:`), optionally
+/// with a `|label`. Anything else (e.g. `5 and **bold** > 2`) is treated as
+/// literal text so conversion can continue inside it.
+fn is_mrkdwn_span(inner: &str) -> bool {
+    if inner.is_empty() {
+        return false;
+    }
+    let first = inner.as_bytes()[0];
+    if matches!(first, b'@' | b'#' | b'!') {
+        return true;
+    }
+    // Link form: <scheme:...> possibly with a |label. Check the part before `|`.
+    let url = inner.split('|').next().unwrap_or(inner);
+    let schemes = ["http://", "https://", "mailto:", "tel:"];
+    schemes.iter().any(|s| url.starts_with(s))
 }
 
 /// Find the next occurrence of the byte sequence `seq` at or after `from`.
@@ -503,6 +581,52 @@ mod tests {
     fn unmatched_markers_are_literal() {
         assert_eq!(markdown_to_mrkdwn("a * b"), "a * b");
         assert_eq!(markdown_to_mrkdwn("2 * 3 = 6"), "2 * 3 = 6");
+    }
+
+    #[test]
+    fn spaced_asterisks_are_not_italic() {
+        // Multiple space-flanked asterisks must stay literal (CommonMark
+        // flanking rules); regression test for the `a * b * c` bug.
+        assert_eq!(markdown_to_mrkdwn("a * b * c"), "a * b * c");
+        assert_eq!(markdown_to_mrkdwn("1 * 2 * 3 * 4"), "1 * 2 * 3 * 4");
+        // But a genuine *italic* (no inner-flanking whitespace) still converts.
+        assert_eq!(markdown_to_mrkdwn("an *italic* word"), "an _italic_ word");
+        assert_eq!(markdown_to_mrkdwn("*two words*"), "_two words_");
+    }
+
+    #[test]
+    fn angle_brackets_only_preserved_for_real_spans() {
+        // Non-span angle brackets (comparisons) must not swallow conversion.
+        assert_eq!(
+            markdown_to_mrkdwn("x < 5 and **bold** > 2"),
+            "x < 5 and *bold* > 2"
+        );
+        assert_eq!(
+            markdown_to_mrkdwn("if a < b and c > d"),
+            "if a < b and c > d"
+        );
+        // Genuine mrkdwn spans are still preserved verbatim.
+        assert_eq!(
+            markdown_to_mrkdwn("see <https://e.com|here> and <@U123>"),
+            "see <https://e.com|here> and <@U123>"
+        );
+        assert_eq!(markdown_to_mrkdwn("ping <!here> now"), "ping <!here> now");
+    }
+
+    #[test]
+    fn link_url_with_parentheses() {
+        // Balanced parens inside the URL must not truncate the link.
+        assert_eq!(
+            markdown_to_mrkdwn("[Topic](https://en.wikipedia.org/wiki/Topic_(disambiguation))"),
+            "<https://en.wikipedia.org/wiki/Topic_(disambiguation)|Topic>"
+        );
+    }
+
+    #[test]
+    fn unmatched_double_asterisk_does_not_italicize() {
+        // `**foo* bar`: the unmatched `**` stays literal; the lone `*` after
+        // `foo` is space-flanked on its right-hand search so no italic forms.
+        assert_eq!(markdown_to_mrkdwn("**foo* bar"), "**foo* bar");
     }
 
     #[test]
