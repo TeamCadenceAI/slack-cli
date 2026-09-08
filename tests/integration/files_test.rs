@@ -261,13 +261,15 @@ async fn test_files_get_auth_required() {
 async fn test_files_list_in_channel() {
     let mut env = test_env_or_skip!();
 
-    // Mock files.list with channel filter
+    // Mock files.list with channel filter. Web API requests are sent as
+    // application/x-www-form-urlencoded (not JSON), so match the encoded body.
     let _m = env
         .server
         .mock("POST", "/files.list")
-        .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-            "channel": "C001"
-        })))
+        .match_body(mockito::Matcher::UrlEncoded(
+            "channel".into(),
+            "C001".into(),
+        ))
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(mock_files_list_response(&[(
