@@ -122,6 +122,33 @@ slack auth remove T1234567890
 slack auth browser-help
 ```
 
+#### Selecting a workspace
+
+With multiple workspaces configured, target one per command with `-w` /
+`--workspace` (or the `SLACK_WORKSPACE` env var). The value is matched against
+each workspace's **team ID** or **domain** — team *names* are not matched
+(they're user-editable and too volatile to be a stable selector):
+
+```bash
+slack -w T04U8BDD0KC channels list        # by team ID
+slack -w cadence-app channels list         # by domain (subdomain)
+slack -w cadence-app.slack.com channels list   # full URL also accepted
+
+export SLACK_WORKSPACE=cadence-app         # session default
+slack channels list
+```
+
+Run `slack auth list` to see the selectable values. Its columns are
+`team_id`, `domain`, `name`, `token_type`, and a `*` default marker (JSON
+includes a `team_domain` field):
+
+```
+T04U8BDD0KC   cadence-app   Cadence   Browser   *
+```
+
+The stored default (set via `slack auth switch <team_id|domain>`) is used when
+no `-w` / `SLACK_WORKSPACE` is given.
+
 ### Channels (`slack channels` or `slack c`)
 
 ```bash
@@ -311,7 +338,7 @@ slack channels list --plain
 
 ```bash
 --plain            # Plain TSV output instead of JSON
--w, --workspace    # Specify workspace (team ID or name)
+-w, --workspace    # Select workspace by team ID (T…) or domain (myteam / myteam.slack.com)
 --token            # Override token (skip keyring)
 -v, --verbose      # Enable verbose logging to stderr
 --help             # Show help
@@ -323,7 +350,7 @@ slack channels list --plain
 | Variable | Description |
 |----------|-------------|
 | `SLACK_TOKEN` | Default token (overrides keyring) |
-| `SLACK_WORKSPACE` | Default workspace |
+| `SLACK_WORKSPACE` | Default workspace (team ID or domain, same as `-w`) |
 | `SLACK_TOKEN_STORE_PATH` | Use file-based storage instead of keyring |
 | `SLACK_API_BASE_URL` | Override API base URL (for testing) |
 

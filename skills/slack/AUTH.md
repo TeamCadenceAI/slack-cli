@@ -58,14 +58,28 @@ slack auth list --check   # + validate each token via auth.test (live/expired)
 slack auth status         # current workspace auth details
 ```
 
-`auth list --check` adds a `live` boolean (JSON) / trailing `live|expired`
-column (`--plain`) so you can tell which stored tokens still work.
+`auth list` columns (`--plain`): `team_id  domain  name  token_type  default`.
+The **team_id** and **domain** are the values accepted by `-w` / `SLACK_WORKSPACE`
+and `auth switch`/`remove` (team names are not matched).
+
+`auth list --check` validates each stored token via `auth.test` and adds a
+`live` boolean (JSON) / trailing `live|expired` column (`--plain`) so you can
+tell which tokens still work.
+
+## Selecting a workspace
+
+```bash
+slack -w T04U8BDD0KC channels list          # by team ID
+slack -w cadence-app channels list          # by domain (subdomain)
+slack -w cadence-app.slack.com channels list  # full URL accepted too
+export SLACK_WORKSPACE=cadence-app           # session default
+```
 
 ## Switch & remove
 
 ```bash
-slack auth switch T1234567890   # set default workspace by team ID
-slack auth remove T1234567890   # remove a workspace
+slack auth switch cadence-app     # set default workspace (team ID or domain)
+slack auth remove T1234567890     # remove a workspace (team ID or domain)
 ```
 
 ## Token types
@@ -81,5 +95,5 @@ slack auth remove T1234567890   # remove a workspace
 | Variable | Purpose |
 |----------|---------|
 | `SLACK_TOKEN` | Override token for all commands |
-| `SLACK_WORKSPACE` | Default workspace team ID |
+| `SLACK_WORKSPACE` | Default workspace (team ID or domain, same as `-w`) |
 | `SLACK_TOKEN_STORE_PATH` | Use a JSON file instead of system keyring |

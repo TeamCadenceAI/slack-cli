@@ -19,4 +19,4 @@ pub use storage::{KeyringStore, WorkspaceInfo};
 pub use store::{
     get_token_store, FileTokenStore, KeyringTokenStore, TokenStore, TOKEN_STORE_PATH_ENV,
 };
-pub use tokens::{TokenSet, TokenType};
+pub use tokens::{normalize_workspace_domain, workspace_matches, TokenSet, TokenType};
