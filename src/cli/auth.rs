@@ -36,6 +36,18 @@ pub enum AuthCommands {
         #[arg(long)]
         manual: bool,
 
+        /// Auto-import creds from a locally logged-in Slack (browser / desktop app)
+        #[arg(long, conflicts_with_all = ["oauth", "token", "xoxc", "xoxd", "manual"])]
+        from_browser: bool,
+
+        /// Restrict --from-browser import to a workspace URL (e.g. myteam.slack.com)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Restrict --from-browser import to a specific browser (e.g. chrome, brave)
+        #[arg(long)]
+        browser: Option<String>,
+
         /// OAuth scopes to request
         #[arg(
             long,
@@ -94,10 +106,16 @@ pub async fn run(
             xoxd,
             token,
             manual,
+            from_browser,
+            url,
+            browser,
             scopes,
         } => {
             // Determine which auth method to use
-            if let Some(token_str) = token {
+            if *from_browser {
+                // Auto-import from a locally logged-in Slack (browser / desktop app)
+                add_from_browser(url.clone(), browser.clone(), output_mode).await?;
+            } else if let Some(token_str) = token {
                 // Direct token provided
                 add_direct_token(token_str, output_mode).await?;
             } else if let (Some(xoxc_str), Some(xoxd_str)) = (xoxc, xoxd) {
@@ -410,15 +428,19 @@ async fn add_direct_token(
     Ok(())
 }
 
-/// Add browser tokens (xoxc-* with xoxd-*)
-async fn add_browser_tokens(
+/// Validate a pair of browser tokens against the API and persist them.
+///
+/// This is the shared "auth_test -> store" path used both by the manual
+/// `--xoxc/--xoxd` flow and the `--from-browser` importer. It performs no
+/// output of its own so callers can format results however they like.
+///
+/// Returns the validated `AuthInfo` (team/user identity) on success.
+async fn store_browser_tokens(
     xoxc_str: &str,
     xoxd_str: &str,
-    output_mode: crate::output::OutputMode,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<crate::api::AuthTestResponse> {
     use crate::api::SlackClient;
     use crate::auth::{get_token_store, TokenSet};
-    use crate::output::write_json;
 
     let store = get_token_store();
 
@@ -459,6 +481,19 @@ async fn add_browser_tokens(
         }
     }
 
+    Ok(auth_info)
+}
+
+/// Add browser tokens (xoxc-* with xoxd-*)
+async fn add_browser_tokens(
+    xoxc_str: &str,
+    xoxd_str: &str,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    use crate::output::write_json;
+
+    let auth_info = store_browser_tokens(xoxc_str, xoxd_str).await?;
+
     if output_mode == crate::output::OutputMode::Plain {
         println!(
             "Added\t{}\t{}\t{}\t{}",
@@ -473,6 +508,100 @@ async fn add_browser_tokens(
             "user": auth_info.user,
             "token_type": "Browser",
         }))?;
+    }
+
+    Ok(())
+}
+
+/// Auto-import creds from a locally logged-in Slack (browser / desktop app).
+///
+/// Discovers workspaces via [`crate::auth::extract::extract_workspaces`], then
+/// reuses the shared `auth_test -> store` path ([`store_browser_tokens`]) for
+/// each. Every workspace is attempted independently so one bad/expired session
+/// does not abort the import; results are summarized as JSON (or TSV in
+/// `--plain` mode).
+async fn add_from_browser(
+    url: Option<String>,
+    browser: Option<String>,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    use crate::auth::{extract_workspaces, ExtractOptions};
+    use crate::output::write_json;
+
+    let opts = ExtractOptions { url, browser };
+    let requested_url = opts.url.clone();
+    let workspaces = extract_workspaces(&opts)?;
+
+    if workspaces.is_empty() {
+        let msg = match requested_url {
+            Some(u) => format!(
+                "No locally logged-in Slack workspace matching '{u}' was found. It may not have an \
+                 active session stored locally - open it in a supported browser and sign in, or run \
+                 without --url to see all detected workspaces."
+            ),
+            None => "No locally logged-in Slack workspaces were found. Make sure you are signed in to \
+                 Slack in a supported browser or the Slack desktop app."
+                .to_string(),
+        };
+        return Err(crate::error::SlackError::Other(msg));
+    }
+
+    // Accumulate outcomes so a single failing workspace doesn't abort the rest.
+    let mut added: Vec<serde_json::Value> = Vec::new();
+    let mut errored: Vec<serde_json::Value> = Vec::new();
+
+    for ws in &workspaces {
+        match store_browser_tokens(&ws.tokens.xoxc, &ws.tokens.xoxd).await {
+            Ok(auth_info) => added.push(serde_json::json!({
+                "team_id": auth_info.team_id,
+                "team": auth_info.team,
+                "user_id": auth_info.user_id,
+                "user": auth_info.user,
+                "source": ws.source,
+            })),
+            Err(e) => errored.push(serde_json::json!({
+                "team_id": ws.team_id,
+                "team": ws.team_name,
+                "domain": ws.team_domain,
+                "source": ws.source,
+                "error": e.to_string(),
+            })),
+        }
+    }
+
+    if output_mode == crate::output::OutputMode::Plain {
+        for a in &added {
+            println!(
+                "Added\t{}\t{}\t{}\t{}",
+                a["team_id"].as_str().unwrap_or(""),
+                a["team"].as_str().unwrap_or(""),
+                a["user_id"].as_str().unwrap_or(""),
+                a["user"].as_str().unwrap_or("")
+            );
+        }
+        for e in &errored {
+            eprintln!(
+                "Error\t{}\t{}\t{}",
+                e["team"].as_str().unwrap_or(""),
+                e["source"].as_str().unwrap_or(""),
+                e["error"].as_str().unwrap_or("")
+            );
+        }
+    } else {
+        write_json(&serde_json::json!({
+            "added": added,
+            "errored": errored,
+            "added_count": added.len(),
+            "errored_count": errored.len(),
+        }))?;
+    }
+
+    // If nothing was added but we had candidates, surface a non-zero exit.
+    if added.is_empty() {
+        return Err(crate::error::SlackError::Other(
+            "Found local Slack sessions but none could be validated (all tokens failed auth_test)."
+                .into(),
+        ));
     }
 
     Ok(())
@@ -703,6 +832,7 @@ mod tests {
                 xoxd,
                 oauth,
                 manual,
+                from_browser,
                 ..
             } = auth_cmd.command
             {
@@ -712,6 +842,7 @@ mod tests {
                 assert!(xoxd.is_none());
                 assert!(!oauth); // --oauth flag not explicitly set
                 assert!(!manual);
+                assert!(!from_browser);
                 // But the behavior will default to OAuth in the run() function
             } else {
                 panic!("Expected Add command");
@@ -719,5 +850,87 @@ mod tests {
         } else {
             panic!("Expected Auth command");
         }
+    }
+
+    #[test]
+    fn test_parse_auth_add_from_browser() {
+        let cli = Cli::try_parse_from(["slack", "auth", "add", "--from-browser"]).unwrap();
+        if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
+            if let AuthCommands::Add {
+                from_browser,
+                url,
+                browser,
+                ..
+            } = auth_cmd.command
+            {
+                assert!(from_browser);
+                assert!(url.is_none());
+                assert!(browser.is_none());
+            } else {
+                panic!("Expected Add command");
+            }
+        } else {
+            panic!("Expected Auth command");
+        }
+    }
+
+    #[test]
+    fn test_parse_auth_add_from_browser_with_url_and_browser() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "auth",
+            "add",
+            "--from-browser",
+            "--url",
+            "myteam.slack.com",
+            "--browser",
+            "chrome",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
+            if let AuthCommands::Add {
+                from_browser,
+                url,
+                browser,
+                ..
+            } = auth_cmd.command
+            {
+                assert!(from_browser);
+                assert_eq!(url, Some("myteam.slack.com".to_string()));
+                assert_eq!(browser, Some("chrome".to_string()));
+            } else {
+                panic!("Expected Add command");
+            }
+        } else {
+            panic!("Expected Auth command");
+        }
+    }
+
+    #[test]
+    fn test_parse_auth_add_from_browser_conflicts_with_token() {
+        let result = Cli::try_parse_from([
+            "slack",
+            "auth",
+            "add",
+            "--from-browser",
+            "--token",
+            "xoxp-123",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_auth_add_from_browser_conflicts_with_xoxc() {
+        let result = Cli::try_parse_from([
+            "slack",
+            "auth",
+            "add",
+            "--from-browser",
+            "--xoxc",
+            "xoxc-1",
+            "--xoxd",
+            "xoxd-2",
+        ]);
+        assert!(result.is_err());
     }
 }

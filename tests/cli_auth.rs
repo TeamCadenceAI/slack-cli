@@ -21,6 +21,7 @@ fn test_parse_auth_add_token() {
             oauth,
             manual,
             scopes,
+            ..
         } = auth_cmd.command
         {
             assert_eq!(token, Some("xoxp-123456789".to_string()));
