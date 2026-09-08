@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-08
+
+### Fixed
+
+- **macOS Keychain prompt storm**: the keyring backend stored each workspace
+  as its own Keychain item (`token:<team_id>`) plus separate `default` /
+  `workspaces` items. Because macOS authorizes Keychain access per item,
+  listing workspaces or resolving `-w`/`SLACK_WORKSPACE` read every item and
+  triggered a permission prompt **per workspace** (a dozen-plus prompts for
+  users with many workspaces). All state is now stored in a **single**
+  keyring item as one JSON blob, read once per process and cached, so the
+  user is prompted at most once (and "Always Allow" silences it thereafter).
+  Existing installs are migrated transparently on first run: the old
+  per-workspace items are read one final time, consolidated into the blob,
+  and then removed. The migration persists the blob before deleting any
+  legacy item, so an interrupted migration never loses tokens.
+
 ## [0.2.0] - 2026-09-08
 
 ### Added
@@ -209,7 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows for testing and releases
 - No external config files required
 
-[Unreleased]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TeamCadenceAI/slack-cli/compare/v0.1.0...v0.1.1
