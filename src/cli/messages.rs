@@ -79,7 +79,9 @@ pub enum MessagesCommands {
         #[arg(long)]
         thread_ts: Option<String>,
 
-        /// Message format
+        /// Message format: `markdown` converts standard Markdown to Slack
+        /// mrkdwn (**bold**, [text](url), lists, etc.); `plain` sends the text
+        /// verbatim with mrkdwn parsing disabled.
         #[arg(long, value_enum, default_value = "markdown")]
         format: MessageFormat,
 
@@ -140,8 +142,10 @@ pub enum MessagesCommands {
 /// Message format options
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
 pub enum MessageFormat {
+    /// Convert standard Markdown to Slack mrkdwn before sending (default).
     #[default]
     Markdown,
+    /// Send text verbatim with Slack mrkdwn parsing disabled.
     Plain,
 }
 
@@ -438,7 +442,18 @@ async fn send_message(
         ));
     }
 
-    let mut params = ChatPostMessageParams::new(&channel_id).with_text(&message_text);
+    // Convert the message text according to the requested format.
+    let outgoing_text = match format {
+        // Standard Markdown -> Slack mrkdwn (**bold** -> *bold*,
+        // [t](url) -> <url|t>, bullets -> •, etc.). Slack parses the `text`
+        // field as mrkdwn by default, so without this common Markdown renders
+        // as literal characters. See issue #1.
+        MessageFormat::Markdown => crate::utils::markdown_to_mrkdwn(&message_text),
+        // Plain: send as-is and disable mrkdwn parsing below.
+        MessageFormat::Plain => message_text.clone(),
+    };
+
+    let mut params = ChatPostMessageParams::new(&channel_id).with_text(&outgoing_text);
 
     if let Some(ts) = thread_ts {
         params = params.in_thread(ts);
@@ -447,7 +462,8 @@ async fn send_message(
     // Set markdown based on format
     match format {
         MessageFormat::Markdown => {
-            // mrkdwn is enabled by default in Slack, no need to set
+            // mrkdwn parsing is enabled by default in Slack; the text has
+            // already been converted from Markdown above.
         }
         MessageFormat::Plain => {
             params.mrkdwn = Some(false);

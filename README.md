@@ -158,8 +158,11 @@ slack messages list C123456789 --limit 100
 # List messages from last 7 days
 slack messages list "#general" --limit 7d
 
-# Send a message
-slack messages send "#general" "Hello, world!"
+# Send a message (text is Markdown by default and converted to Slack mrkdwn)
+slack messages send "#general" "Hello, **world**! See [docs](https://example.com)"
+
+# Send verbatim, no Markdown conversion / mrkdwn parsing
+slack messages send "#general" "literal *text*" --format plain
 
 # Reply to a thread
 slack messages send "#general" "Reply text" --thread-ts 1234567890.123456
@@ -178,6 +181,27 @@ slack messages search "in:#general project" --count 50
 # Get a specific message
 slack messages get "C123456789:1234567890.123456"
 ```
+
+#### Message formatting
+
+`messages send` treats input as **standard Markdown** by default (`--format
+markdown`) and converts it to Slack **mrkdwn** before sending, so agents and
+scripts can emit ordinary Markdown:
+
+| Markdown | Sent as (mrkdwn) | Renders as |
+| --- | --- | --- |
+| `**bold**`, `__bold__` | `*bold*` | **bold** |
+| `*italic*`, `_italic_` | `_italic_` | _italic_ |
+| `~~strike~~` | `~strike~` | ~~strike~~ |
+| `# Heading` | `*Heading*` | bold line |
+| `[text](url)` | `<url\|text>` | linked text |
+| `![alt](url)` | `<url\|alt>` | link |
+| `- item` / `* item` / `+ item` | `• item` | bullet |
+| `1. item` / `1) item` | `1. item` | numbered |
+
+Inline code `` `…` ``, fenced code blocks ```` ``` ````, and existing mrkdwn
+spans (`<@U…>` mentions, `<url|text>` links) are passed through untouched. Use
+`--format plain` to send text verbatim with mrkdwn parsing disabled.
 
 ### Users (`slack users` or `slack u`)
 

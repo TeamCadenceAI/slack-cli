@@ -117,6 +117,16 @@ slack messages send "#general" "Reply" --thread-ts 1234567890.123456
 echo "Automated report ready" | slack messages send "#ops" --stdin
 ```
 
+**Formatting:** message text is **standard Markdown by default** and is
+converted to Slack mrkdwn before sending. Just write normal Markdown —
+`**bold**`, `*italic*`, `[text](url)`, `# heading`, and `-`/`1.` lists all work.
+Inline/fenced code and existing `<@U…>`/`<url|text>` spans are left untouched.
+Use `--format plain` to send text verbatim (no conversion, mrkdwn parsing off).
+
+```bash
+slack messages send "#general" "Deploy **failed** on [prod](https://ci/123) — see logs"
+```
+
 ### Read messages
 ```bash
 # Last 50 messages in a channel
