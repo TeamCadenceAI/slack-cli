@@ -38,6 +38,23 @@ pub struct ExtractedWorkspace {
     pub source: String,
 }
 
+/// A workspace discovered locally, described by metadata only.
+///
+/// Unlike [`ExtractedWorkspace`], this carries **no** credentials: it is
+/// produced by reading only the browser/app LevelDB local storage, so building
+/// it never touches the OS Keychain, never decrypts the `xoxd` cookie, and
+/// never makes a network call. It answers "which workspaces *could* I import?".
+pub struct DiscoveredWorkspace {
+    /// The Slack team ID (e.g. `T012345ABCD`), if known.
+    pub team_id: Option<String>,
+    /// The workspace domain (the leading label of `<sub>.slack.com`), if known.
+    pub team_domain: Option<String>,
+    /// The human-readable workspace name, if known.
+    pub team_name: Option<String>,
+    /// Where this was found, formatted as `"<browser>/<profile>"`.
+    pub source: String,
+}
+
 /// Options controlling extraction.
 pub struct ExtractOptions {
     /// Optional workspace URL to prefer, e.g. `myteam.slack.com` or
@@ -62,6 +79,44 @@ pub struct ExtractOptions {
 /// can report that the requested workspace was not found locally.
 ///
 /// Results are deduplicated by team ID (falling back to the `xoxc` token).
+/// Discover which Slack workspaces are signed into local browsers / the Slack
+/// desktop app, **without** decrypting cookies or contacting the network.
+///
+/// This reads only the LevelDB local storage of each discovered profile (via
+/// [`chromium::extract_tokens_from_leveldb`]) and reports team metadata. It is
+/// the backing logic for `slack auth discover`. Results are deduplicated by
+/// team ID (falling back to domain) and, if `browser` is set, limited to
+/// matching browsers.
+pub fn discover_workspaces(browser: Option<&str>) -> Vec<DiscoveredWorkspace> {
+    let mut out: Vec<DiscoveredWorkspace> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for profile in profiles::discover_profiles(browser) {
+        let teams = match chromium::extract_tokens_from_leveldb(&profile.local_storage_leveldb) {
+            Ok(teams) => teams,
+            Err(_) => continue,
+        };
+        let source = format!("{}/{}", profile.browser, profile.profile);
+        for team in teams {
+            let key = match (&team.team_id, &team.domain) {
+                (Some(id), _) => format!("id:{id}"),
+                (None, Some(dom)) => format!("dom:{dom}"),
+                (None, None) => format!("xoxc:{}", team.xoxc),
+            };
+            if seen.insert(key) {
+                out.push(DiscoveredWorkspace {
+                    team_id: team.team_id,
+                    team_domain: team.domain,
+                    team_name: team.name,
+                    source: source.clone(),
+                });
+            }
+        }
+    }
+
+    out
+}
+
 pub fn extract_workspaces(opts: &ExtractOptions) -> Result<Vec<ExtractedWorkspace>> {
     let mut workspaces: Vec<ExtractedWorkspace> = Vec::new();
 

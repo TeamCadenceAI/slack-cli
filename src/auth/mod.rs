@@ -10,7 +10,10 @@ pub mod store;
 mod tokens;
 
 pub use browser::{print_extraction_instructions, BrowserTokens};
-pub use extract::{extract_workspaces, ExtractOptions, ExtractedWorkspace};
+pub use extract::{
+    discover_workspaces, extract_workspaces, DiscoveredWorkspace, ExtractOptions,
+    ExtractedWorkspace,
+};
 pub use oauth::{OAuthConfig, OAuthFlow, DEFAULT_SCOPES};
 pub use storage::{KeyringStore, WorkspaceInfo};
 pub use store::{

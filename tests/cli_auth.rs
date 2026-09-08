@@ -176,7 +176,7 @@ fn test_auth_add_xoxd_requires_xoxc() {
 fn test_parse_auth_list() {
     let cli = Cli::try_parse_from(["slack", "auth", "list"]).unwrap();
     if let Commands::Auth(auth_cmd) = cli.command {
-        assert!(matches!(auth_cmd.command, AuthCommands::List));
+        assert!(matches!(auth_cmd.command, AuthCommands::List { .. }));
     } else {
         panic!("Expected Auth command");
     }
@@ -187,7 +187,7 @@ fn test_parse_auth_list_with_plain() {
     let cli = Cli::try_parse_from(["slack", "auth", "list", "--plain"]).unwrap();
     assert!(cli.plain);
     if let Commands::Auth(auth_cmd) = cli.command {
-        assert!(matches!(auth_cmd.command, AuthCommands::List));
+        assert!(matches!(auth_cmd.command, AuthCommands::List { .. }));
     } else {
         panic!("Expected Auth command");
     }
@@ -346,7 +346,7 @@ fn test_parse_auth_browser_help() {
 fn test_auth_alias_list() {
     let cli = Cli::try_parse_from(["slack", "a", "list"]).unwrap();
     if let Commands::Auth(auth_cmd) = cli.command {
-        assert!(matches!(auth_cmd.command, AuthCommands::List));
+        assert!(matches!(auth_cmd.command, AuthCommands::List { .. }));
     } else {
         panic!("Expected Auth command");
     }

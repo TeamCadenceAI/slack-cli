@@ -15,7 +15,16 @@ pub struct AuthCmd {
 #[derive(Subcommand, Debug)]
 pub enum AuthCommands {
     /// Authorize a Slack workspace
+    ///
+    /// With a workspace argument (e.g. `myteam` or `myteam.slack.com`) and no
+    /// other method flag, credentials are extracted from a locally logged-in
+    /// Slack (the desktop app or a browser). Use `slack auth discover` to see
+    /// what is available.
     Add {
+        /// Workspace subdomain or URL to import from local apps (e.g. myteam or myteam.slack.com)
+        #[arg(conflicts_with_all = ["oauth", "token", "xoxc", "xoxd", "manual"])]
+        workspace: Option<String>,
+
         /// Use browser OAuth flow
         #[arg(long, conflicts_with_all = ["xoxc", "xoxd", "token"])]
         oauth: bool,
@@ -40,11 +49,11 @@ pub enum AuthCommands {
         #[arg(long, conflicts_with_all = ["oauth", "token", "xoxc", "xoxd", "manual"])]
         from_browser: bool,
 
-        /// Restrict --from-browser import to a workspace URL (e.g. myteam.slack.com)
+        /// Restrict local import to a workspace URL (alias of the positional argument)
         #[arg(long)]
         url: Option<String>,
 
-        /// Restrict --from-browser import to a specific browser (e.g. chrome, brave)
+        /// Restrict local import to a specific browser/app (e.g. slack, chrome, brave)
         #[arg(long)]
         browser: Option<String>,
 
@@ -58,7 +67,25 @@ pub enum AuthCommands {
     },
 
     /// List authorized workspaces
-    List,
+    List {
+        /// Validate each stored token via auth.test and report live/expired status
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Discover Slack workspaces signed into local apps (desktop app / browsers)
+    ///
+    /// Reads only local storage; performs no Keychain access or network calls
+    /// unless `--check` is given.
+    Discover {
+        /// Restrict discovery to a specific browser/app (e.g. slack, chrome, brave)
+        #[arg(long)]
+        browser: Option<String>,
+
+        /// Validate each discovered workspace by importing-and-testing its token
+        #[arg(long)]
+        check: bool,
+    },
 
     /// Remove workspace authorization
     Remove {
@@ -101,6 +128,7 @@ pub async fn run(
 
     match &cmd.command {
         AuthCommands::Add {
+            workspace: ws_arg,
             oauth: _, // Default behavior is OAuth, so this flag is now only used for documentation
             xoxc,
             xoxd,
@@ -111,10 +139,14 @@ pub async fn run(
             browser,
             scopes,
         } => {
+            // A positional workspace argument (or --url) selects the local
+            // extraction path; the positional form takes precedence.
+            let local_target = ws_arg.clone().or_else(|| url.clone());
+
             // Determine which auth method to use
-            if *from_browser {
+            if *from_browser || local_target.is_some() {
                 // Auto-import from a locally logged-in Slack (browser / desktop app)
-                add_from_browser(url.clone(), browser.clone(), output_mode).await?;
+                add_from_browser(local_target, browser.clone(), output_mode).await?;
             } else if let Some(token_str) = token {
                 // Direct token provided
                 add_direct_token(token_str, output_mode).await?;
@@ -181,20 +213,66 @@ pub async fn run(
             }
         }
 
-        AuthCommands::List => {
+        AuthCommands::List { check } => {
             let workspaces = store.get_workspace_info()?;
+
+            // Optionally validate each stored token via auth.test.
+            let mut live: std::collections::HashMap<String, bool> =
+                std::collections::HashMap::new();
+            if *check {
+                for ws in &workspaces {
+                    let ok = match store.get_token(&ws.team_id) {
+                        Ok(Some(token)) => match SlackClient::new(token) {
+                            Ok(client) => client.auth_test().await.is_ok(),
+                            Err(_) => false,
+                        },
+                        _ => false,
+                    };
+                    live.insert(ws.team_id.clone(), ok);
+                }
+            }
 
             if plain {
                 for ws in &workspaces {
                     let default_marker = if ws.is_default { "*" } else { "" };
-                    println!(
-                        "{}\t{}\t{}\t{}",
-                        ws.team_id, ws.team_name, ws.token_type, default_marker
-                    );
+                    if *check {
+                        let status = if live.get(&ws.team_id).copied().unwrap_or(false) {
+                            "live"
+                        } else {
+                            "expired"
+                        };
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            ws.team_id, ws.team_name, ws.token_type, default_marker, status
+                        );
+                    } else {
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            ws.team_id, ws.team_name, ws.token_type, default_marker
+                        );
+                    }
                 }
+            } else if *check {
+                let enriched: Vec<serde_json::Value> = workspaces
+                    .iter()
+                    .map(|ws| {
+                        serde_json::json!({
+                            "team_id": ws.team_id,
+                            "team_name": ws.team_name,
+                            "token_type": ws.token_type,
+                            "is_default": ws.is_default,
+                            "live": live.get(&ws.team_id).copied().unwrap_or(false),
+                        })
+                    })
+                    .collect();
+                write_json(&enriched)?;
             } else {
                 write_json(&workspaces)?;
             }
+        }
+
+        AuthCommands::Discover { browser, check } => {
+            run_discover(browser.clone(), *check, output_mode).await?;
         }
 
         AuthCommands::Remove { workspace, yes } => {
@@ -513,6 +591,91 @@ async fn add_browser_tokens(
     Ok(())
 }
 
+/// List Slack workspaces signed into local apps (desktop app / browsers).
+///
+/// Backs `slack auth discover`. By default this only reads local storage — no
+/// Keychain access, no cookie decryption, no network. With `check = true`, each
+/// discovered workspace is validated by extracting and `auth_test`-ing its
+/// token (which does touch the Keychain and network).
+async fn run_discover(
+    browser: Option<String>,
+    check: bool,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    use crate::auth::{discover_workspaces, extract_workspaces, ExtractOptions};
+    use crate::output::write_json;
+
+    let discovered = discover_workspaces(browser.as_deref());
+
+    // When --check is requested, extract full credentials once and auth_test
+    // each, keyed by team domain/id so we can annotate the discovery list.
+    let mut live: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    if check {
+        let extracted = extract_workspaces(&ExtractOptions {
+            url: None,
+            browser: browser.clone(),
+        })
+        .unwrap_or_default();
+        for ws in &extracted {
+            let ok = store_browser_tokens(&ws.tokens.xoxc, &ws.tokens.xoxd)
+                .await
+                .is_ok();
+            if let Some(key) = ws.team_id.clone().or_else(|| ws.team_domain.clone()) {
+                live.insert(key, ok);
+            }
+        }
+    }
+
+    let live_for = |team_id: &Option<String>, domain: &Option<String>| -> Option<bool> {
+        if !check {
+            return None;
+        }
+        team_id
+            .as_ref()
+            .and_then(|id| live.get(id).copied())
+            .or_else(|| domain.as_ref().and_then(|d| live.get(d).copied()))
+            .or(Some(false))
+    };
+
+    if output_mode == crate::output::OutputMode::Plain {
+        for ws in &discovered {
+            let base = format!(
+                "{}\t{}\t{}\t{}",
+                ws.team_domain.as_deref().unwrap_or(""),
+                ws.team_id.as_deref().unwrap_or(""),
+                ws.team_name.as_deref().unwrap_or(""),
+                ws.source,
+            );
+            match live_for(&ws.team_id, &ws.team_domain) {
+                Some(ok) => println!("{base}\t{}", if ok { "live" } else { "expired" }),
+                None => println!("{base}"),
+            }
+        }
+    } else {
+        let rows: Vec<serde_json::Value> = discovered
+            .iter()
+            .map(|ws| {
+                let mut obj = serde_json::json!({
+                    "team_id": ws.team_id,
+                    "team_domain": ws.team_domain,
+                    "team_name": ws.team_name,
+                    "source": ws.source,
+                });
+                if let Some(ok) = live_for(&ws.team_id, &ws.team_domain) {
+                    obj["live"] = serde_json::Value::Bool(ok);
+                }
+                obj
+            })
+            .collect();
+        write_json(&serde_json::json!({
+            "workspaces": rows,
+            "count": discovered.len(),
+        }))?;
+    }
+
+    Ok(())
+}
+
 /// Auto-import creds from a locally logged-in Slack (browser / desktop app).
 ///
 /// Discovers workspaces via [`crate::auth::extract::extract_workspaces`], then
@@ -729,7 +892,7 @@ mod tests {
     fn test_parse_auth_list() {
         let cli = Cli::try_parse_from(["slack", "auth", "list"]).unwrap();
         if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
-            assert!(matches!(auth_cmd.command, AuthCommands::List));
+            assert!(matches!(auth_cmd.command, AuthCommands::List { .. }));
         } else {
             panic!("Expected Auth command");
         }
@@ -794,6 +957,56 @@ mod tests {
         let cli = Cli::try_parse_from(["slack", "auth", "browser-help"]).unwrap();
         if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
             assert!(matches!(auth_cmd.command, AuthCommands::BrowserHelp));
+        } else {
+            panic!("Expected Auth command");
+        }
+    }
+
+    #[test]
+    fn test_parse_auth_add_positional_workspace() {
+        let cli = Cli::try_parse_from(["slack", "auth", "add", "onlinegeniuses"]).unwrap();
+        if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
+            if let AuthCommands::Add { workspace, .. } = auth_cmd.command {
+                assert_eq!(workspace.as_deref(), Some("onlinegeniuses"));
+            } else {
+                panic!("Expected Add command");
+            }
+        } else {
+            panic!("Expected Auth command");
+        }
+    }
+
+    #[test]
+    fn test_parse_auth_add_positional_conflicts_with_token() {
+        // A positional workspace and an explicit --token are mutually exclusive.
+        let result = Cli::try_parse_from(["slack", "auth", "add", "myteam", "--token", "xoxp-123"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_auth_list_check() {
+        let cli = Cli::try_parse_from(["slack", "auth", "list", "--check"]).unwrap();
+        if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
+            if let AuthCommands::List { check } = auth_cmd.command {
+                assert!(check);
+            } else {
+                panic!("Expected List command");
+            }
+        } else {
+            panic!("Expected Auth command");
+        }
+    }
+
+    #[test]
+    fn test_parse_auth_discover() {
+        let cli = Cli::try_parse_from(["slack", "auth", "discover", "--browser", "slack"]).unwrap();
+        if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
+            if let AuthCommands::Discover { browser, check } = auth_cmd.command {
+                assert_eq!(browser.as_deref(), Some("slack"));
+                assert!(!check);
+            } else {
+                panic!("Expected Discover command");
+            }
         } else {
             panic!("Expected Auth command");
         }

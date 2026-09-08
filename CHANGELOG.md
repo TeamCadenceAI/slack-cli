@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Import from locally logged-in Slack (`slack auth add <subdomain>`)**: given
+  just a workspace subdomain or URL (e.g. `slack auth add onlinegeniuses` or
+  `onlinegeniuses.slack.com`), the CLI extracts the `xoxc` token and shared
+  `xoxd` cookie from a workspace you are already signed into in the Slack
+  desktop app (or a Chromium-family browser) and authorizes it — no manual
+  token copying. `--browser <name>` narrows the source app/browser. The legacy
+  `--from-browser [--url ...]` form still works. macOS only for now (Chromium
+  browsers + the Slack desktop app); other platforms compile but return a clear
+  unsupported error.
+- **`slack auth discover`**: lists the Slack workspaces signed into local apps
+  (desktop app / browsers). Reads only local storage — no Keychain access,
+  cookie decryption, or network calls — unless `--check` is passed, which
+  validates each token via `auth.test`. `--browser <name>` narrows the source.
+- **`slack auth list --check`**: validates each stored token via `auth.test`
+  and reports live/expired status (new `live` field in JSON, extra column in
+  `--plain`).
+- **Cookie decryption tries all Safe Storage keys**: the macOS Keychain can
+  hold multiple keys under one `"<App> Safe Storage"` service (the Slack app
+  keeps both `Slack Key` and `Slack App Store Key`); the importer now derives a
+  key from each candidate account and uses whichever decrypts a valid `xoxd-`
+  value, fixing imports from the live direct-download desktop app.
+
 ## [0.1.2] - 2026-08-18
 
 ### Fixed
