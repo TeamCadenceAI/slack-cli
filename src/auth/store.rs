@@ -71,6 +71,7 @@ pub trait TokenStore: Send + Sync {
                 info.push(WorkspaceInfo {
                     team_id: token.team_id,
                     team_name: token.team_name,
+                    team_domain: token.team_domain,
                     is_default: default.as_ref() == Some(&team_id),
                     token_type: format!("{:?}", token.token_type),
                 });
@@ -274,6 +275,7 @@ mod tests {
             xoxd_cookie: None,
             team_id: team_id.to_string(),
             team_name: team_name.to_string(),
+            team_domain: None,
             user_id: "U12345".to_string(),
             created_at: chrono::Utc::now(),
             scopes: vec!["channels:read".to_string()],

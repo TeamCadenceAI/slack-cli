@@ -32,10 +32,17 @@ Output is **JSON by default** — ideal for parsing and automation. Use `--plain
 
 ```
 --plain              TSV output instead of JSON
--w, --workspace ID   Target a specific workspace (or set SLACK_WORKSPACE env var)
+-w, --workspace VAL  Select workspace by team ID (T…) or domain (myteam /
+                     myteam.slack.com). Team names are NOT accepted. Or set
+                     the SLACK_WORKSPACE env var.
 --token TOKEN        Use a token directly, bypassing the keyring
 -v, --verbose        Verbose logging to stderr
 ```
+
+**Selecting a workspace:** `-w` matches a workspace's **team ID** or **domain**
+only (names are too volatile). Get the values from `slack auth list` (columns:
+`team_id  domain  name  token_type  default`). Examples:
+`slack -w T04U8BDD0KC …`, `slack -w cadence-app …`, `slack -w cadence-app.slack.com …`.
 
 ## Authentication
 

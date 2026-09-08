@@ -422,6 +422,7 @@ impl KeyringStore {
                 info.push(WorkspaceInfo {
                     team_id: token.team_id,
                     team_name: token.team_name,
+                    team_domain: token.team_domain,
                     is_default: default.as_ref() == Some(&team_id),
                     token_type: format!("{:?}", token.token_type),
                 });
@@ -437,6 +438,9 @@ impl KeyringStore {
 pub struct WorkspaceInfo {
     pub team_id: String,
     pub team_name: String,
+    /// Workspace domain (the `<sub>` in `<sub>.slack.com`), when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_domain: Option<String>,
     pub is_default: bool,
     pub token_type: String,
 }
@@ -454,6 +458,7 @@ mod tests {
             xoxd_cookie: None,
             team_id: team_id.to_string(),
             team_name: team_name.to_string(),
+            team_domain: None,
             user_id: "U12345".to_string(),
             created_at: chrono::Utc::now(),
             scopes: vec!["channels:read".to_string()],
@@ -477,6 +482,7 @@ mod tests {
         let info = WorkspaceInfo {
             team_id: "T12345".to_string(),
             team_name: "Test Workspace".to_string(),
+            team_domain: None,
             is_default: true,
             token_type: "UserOAuth".to_string(),
         };

@@ -60,6 +60,11 @@ pub struct TokenSet {
     pub team_id: String,
     /// The team/workspace name
     pub team_name: String,
+    /// The workspace domain (the `<sub>` in `<sub>.slack.com`), when known.
+    /// Populated from the `auth.test` `url` at store time; used for stable
+    /// `-w <subdomain>` selection (names are too volatile to match on).
+    #[serde(default)]
+    pub team_domain: Option<String>,
     /// The user ID associated with this token
     pub user_id: String,
     /// When the token was created/stored
@@ -96,6 +101,7 @@ impl TokenSet {
             xoxd_cookie: None,
             team_id,
             team_name,
+            team_domain: None,
             user_id,
             created_at: Utc::now(),
             scopes,
@@ -125,10 +131,18 @@ impl TokenSet {
             xoxd_cookie: Some(xoxd_cookie),
             team_id,
             team_name,
+            team_domain: None,
             user_id,
             created_at: Utc::now(),
             scopes: vec![],
         })
+    }
+
+    /// Attach the workspace domain (chainable), normalizing any full URL or
+    /// `<sub>.slack.com` down to the bare leading label.
+    pub fn with_domain(mut self, domain: impl AsRef<str>) -> Self {
+        self.team_domain = normalize_workspace_domain(domain.as_ref());
+        self
     }
 
     /// Validate that this token set is valid
@@ -215,9 +229,118 @@ fn validate_xoxd_cookie(cookie: &str) -> Result<()> {
     Ok(())
 }
 
+/// Normalize a user- or `auth.test`-supplied workspace reference to its bare
+/// domain label (the `<sub>` in `<sub>.slack.com`).
+///
+/// Accepts `cadence-app`, `cadence-app.slack.com`, `https://cadence-app.slack.com/`,
+/// etc., and returns `Some("cadence-app")` (lowercased). Returns `None` when no
+/// meaningful label can be extracted.
+pub fn normalize_workspace_domain(input: &str) -> Option<String> {
+    let mut s = input.trim();
+
+    // Strip scheme.
+    if let Some((_, rest)) = s.split_once("://") {
+        s = rest;
+    }
+    // Strip path / query / fragment / port.
+    s = s
+        .split(['/', '?', '#', ':'])
+        .next()
+        .unwrap_or(s)
+        .trim()
+        .trim_end_matches('.');
+
+    // Take the leading label (before the first dot): `cadence-app.slack.com`
+    // -> `cadence-app`; a bare `cadence-app` is returned as-is.
+    let label = s.split('.').next().unwrap_or(s).trim();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_ascii_lowercase())
+    }
+}
+
+/// Return `true` if `query` selects the workspace identified by `team_id` /
+/// `team_domain`.
+///
+/// Matching is intentionally limited to the **team ID** (exact,
+/// case-insensitive) and the **domain/subdomain** (normalized via
+/// [`normalize_workspace_domain`]). Team *names* are deliberately not matched:
+/// they are user-editable and too volatile to be a stable selector.
+pub fn workspace_matches(query: &str, team_id: &str, team_domain: Option<&str>) -> bool {
+    if query.eq_ignore_ascii_case(team_id) {
+        return true;
+    }
+    match (normalize_workspace_domain(query), team_domain) {
+        (Some(q), Some(d)) => q.eq_ignore_ascii_case(d),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_domain_variants() {
+        assert_eq!(
+            normalize_workspace_domain("cadence-app").as_deref(),
+            Some("cadence-app")
+        );
+        assert_eq!(
+            normalize_workspace_domain("cadence-app.slack.com").as_deref(),
+            Some("cadence-app")
+        );
+        assert_eq!(
+            normalize_workspace_domain("https://cadence-app.slack.com/").as_deref(),
+            Some("cadence-app")
+        );
+        assert_eq!(
+            normalize_workspace_domain("HTTPS://Cadence-App.slack.com/messages").as_deref(),
+            Some("cadence-app")
+        );
+        assert_eq!(normalize_workspace_domain("").as_deref(), None);
+        assert_eq!(normalize_workspace_domain("   ").as_deref(), None);
+    }
+
+    #[test]
+    fn workspace_matches_by_id_and_domain_only() {
+        // team_id, case-insensitive
+        assert!(workspace_matches(
+            "T04U8BDD0KC",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        assert!(workspace_matches(
+            "t04u8bdd0kc",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        // domain / subdomain / full url
+        assert!(workspace_matches(
+            "cadence-app",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        assert!(workspace_matches(
+            "cadence-app.slack.com",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        // team NAME must NOT match
+        assert!(!workspace_matches(
+            "Cadence",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        assert!(!workspace_matches(
+            "antiburn",
+            "T04U8BDD0KC",
+            Some("cadence-app")
+        ));
+        // no domain stored -> only id matches
+        assert!(!workspace_matches("cadence-app", "T04U8BDD0KC", None));
+    }
 
     #[test]
     fn test_token_type_from_prefix_user() {

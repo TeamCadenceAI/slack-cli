@@ -233,8 +233,11 @@ pub async fn run(
             }
 
             if plain {
+                // Columns: team_id, domain, name, token_type, default-marker.
+                // team_id and domain are the stable selectors accepted by -w.
                 for ws in &workspaces {
                     let default_marker = if ws.is_default { "*" } else { "" };
+                    let domain = ws.team_domain.as_deref().unwrap_or("");
                     if *check {
                         let status = if live.get(&ws.team_id).copied().unwrap_or(false) {
                             "live"
@@ -242,13 +245,13 @@ pub async fn run(
                             "expired"
                         };
                         println!(
-                            "{}\t{}\t{}\t{}\t{}",
-                            ws.team_id, ws.team_name, ws.token_type, default_marker, status
+                            "{}\t{}\t{}\t{}\t{}\t{}",
+                            ws.team_id, domain, ws.team_name, ws.token_type, default_marker, status
                         );
                     } else {
                         println!(
-                            "{}\t{}\t{}\t{}",
-                            ws.team_id, ws.team_name, ws.token_type, default_marker
+                            "{}\t{}\t{}\t{}\t{}",
+                            ws.team_id, domain, ws.team_name, ws.token_type, default_marker
                         );
                     }
                 }
@@ -258,6 +261,7 @@ pub async fn run(
                     .map(|ws| {
                         serde_json::json!({
                             "team_id": ws.team_id,
+                            "team_domain": ws.team_domain,
                             "team_name": ws.team_name,
                             "token_type": ws.token_type,
                             "is_default": ws.is_default,
@@ -280,7 +284,9 @@ pub async fn run(
             let workspaces = store.get_workspace_info()?;
             let ws = workspaces
                 .iter()
-                .find(|w| w.team_id == *workspace || w.team_name == *workspace)
+                .find(|w| {
+                    crate::auth::workspace_matches(workspace, &w.team_id, w.team_domain.as_deref())
+                })
                 .ok_or_else(|| crate::error::SlackError::WorkspaceNotFound(workspace.clone()))?;
 
             if !yes {
@@ -332,7 +338,13 @@ pub async fn run(
                 let workspaces = store.get_workspace_info()?;
                 let ws = workspaces
                     .iter()
-                    .find(|w| w.team_id == *ws_name || w.team_name == *ws_name)
+                    .find(|w| {
+                        crate::auth::workspace_matches(
+                            ws_name,
+                            &w.team_id,
+                            w.team_domain.as_deref(),
+                        )
+                    })
                     .ok_or_else(|| {
                         crate::error::SlackError::WorkspaceNotFound(ws_name.to_string())
                     })?;
@@ -392,7 +404,9 @@ pub async fn run(
             let workspaces = store.get_workspace_info()?;
             let ws = workspaces
                 .iter()
-                .find(|w| w.team_id == *workspace || w.team_name == *workspace)
+                .find(|w| {
+                    crate::auth::workspace_matches(workspace, &w.team_id, w.team_domain.as_deref())
+                })
                 .ok_or_else(|| crate::error::SlackError::WorkspaceNotFound(workspace.clone()))?;
 
             store.set_default(&ws.team_id)?;
@@ -470,7 +484,8 @@ async fn add_direct_token(
         auth_info.team.clone(),
         auth_info.user_id.clone(),
         vec![], // Scopes not returned by auth.test
-    )?;
+    )?
+    .with_domain(&auth_info.url);
 
     // Store the token (with fallback hint on error)
     if let Err(e) = store.store_token(&auth_info.team_id, &token) {
@@ -542,7 +557,8 @@ async fn store_browser_tokens(
         auth_info.team_id.clone(),
         auth_info.team.clone(),
         auth_info.user_id.clone(),
-    )?;
+    )?
+    .with_domain(&auth_info.url);
 
     // Store the token (with fallback hint on error)
     if let Err(e) = store.store_token(&auth_info.team_id, &token) {

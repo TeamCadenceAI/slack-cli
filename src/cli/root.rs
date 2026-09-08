@@ -29,7 +29,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub plain: bool,
 
-    /// Workspace to use (defaults to first authorized)
+    /// Workspace to use: team ID (e.g. T04U8BDD0KC) or domain/subdomain
+    /// (e.g. myteam or myteam.slack.com). Defaults to the configured or first
+    /// authorized workspace. See `slack auth list` for available values.
     #[arg(short = 'w', long, global = true, env = "SLACK_WORKSPACE")]
     pub workspace: Option<String>,
 

@@ -137,7 +137,9 @@ fn get_token(
             let workspaces = store.get_workspace_info()?;
             let ws = workspaces
                 .iter()
-                .find(|w| w.team_id == *ws_name || w.team_name == *ws_name)
+                .find(|w| {
+                    crate::auth::workspace_matches(ws_name, &w.team_id, w.team_domain.as_deref())
+                })
                 .ok_or_else(|| SlackError::WorkspaceNotFound(ws_name.to_string()))?;
             store
                 .get_token(&ws.team_id)?
