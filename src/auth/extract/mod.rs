@@ -66,10 +66,12 @@ pub fn extract_workspaces(opts: &ExtractOptions) -> Result<Vec<ExtractedWorkspac
     let mut workspaces: Vec<ExtractedWorkspace> = Vec::new();
 
     for profile in profiles::discover_profiles(opts.browser.as_deref()) {
-        // Derive the OS-specific decryption key. If this fails (e.g. no
-        // keychain entry, or unsupported OS), skip this profile but keep going.
-        let key = match crypto::safe_storage_key(&profile.safe_storage_service) {
-            Ok(key) => key,
+        // Derive the OS-specific decryption key candidates. If this fails (e.g.
+        // no keychain entry, or unsupported OS), skip this profile but keep
+        // going. A single service can expose several keys (e.g. the Slack app's
+        // "Slack Key" vs "Slack App Store Key"); we try them all below.
+        let keys = match crypto::safe_storage_keys(&profile.safe_storage_service) {
+            Ok(keys) => keys,
             Err(err) => {
                 eprintln!(
                     "skipping {}/{}: could not derive safe storage key: {}",
@@ -80,7 +82,7 @@ pub fn extract_workspaces(opts: &ExtractOptions) -> Result<Vec<ExtractedWorkspac
         };
 
         // The `xoxd` cookie is shared across all workspaces in a profile.
-        let xoxd = match cookies::read_slack_d_cookie(&profile.cookies_db, &key) {
+        let xoxd = match cookies::read_slack_d_cookie(&profile.cookies_db, &keys) {
             Ok(Some(xoxd)) => xoxd,
             Ok(None) => {
                 eprintln!(

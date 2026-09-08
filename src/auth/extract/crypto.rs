@@ -31,6 +31,15 @@ use sha1::Sha1;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+/// Well-known Keychain account names used under a `"<App> Safe Storage"`
+/// service. A single service can hold several items (for example the Slack
+/// desktop app keeps both `"Slack Key"` for the direct-download build and
+/// `"Slack App Store Key"` for a Mac App Store install), and only one of them
+/// matches the profile whose cookies we are reading. We therefore try every
+/// candidate account and let the caller keep whichever key actually decrypts.
+#[cfg(target_os = "macos")]
+const KNOWN_SAFE_STORAGE_ACCOUNTS: &[&str] = &["Slack Key", "Slack App Store Key", "Slack"];
+
 /// AES-128-CBC decryptor used for Chromium cookie values.
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
@@ -47,48 +56,88 @@ const AES_KEY_LEN: usize = 16;
 // safe_storage_key
 // ---------------------------------------------------------------------------
 
-/// Derive the AES key used to decrypt a browser's cookie values.
+/// Derive every candidate AES key that might decrypt a profile's cookie values.
 ///
-/// On macOS this reads the generic password stored in the login Keychain under
-/// the given `safe_storage_service` (for example `"Chrome Safe Storage"`) by
-/// invoking `security find-generic-password -s "<service>" -w`, trims the
-/// trailing newline, and runs
-/// `PBKDF2-HMAC-SHA1(password, b"saltysalt", 1003)` to produce a 16-byte key.
+/// On macOS a `"<App> Safe Storage"` service can contain more than one generic
+/// password (see [`KNOWN_SAFE_STORAGE_ACCOUNTS`]). Because
+/// `security find-generic-password -s <service> -w` without an explicit account
+/// returns only the *first* match — which is frequently the wrong one (e.g. a
+/// stale Mac App Store key) — this queries each known account by name as well
+/// as the account-less lookup, then derives a 16-byte key from each distinct
+/// password via `PBKDF2-HMAC-SHA1(password, b"saltysalt", 1003)`.
+///
+/// The caller is expected to try each returned key in turn and keep whichever
+/// one actually decrypts to a valid `xoxd-` value.
 ///
 /// # Errors
 ///
-/// Returns [`SlackError`] if the Keychain lookup fails (for example the user
-/// denies access or the item does not exist), or on any non-macOS platform,
-/// where Keychain access is not yet implemented.
+/// Returns [`SlackError`] if no password could be read for the service at all
+/// (for example the item does not exist or access was denied), or on any
+/// non-macOS platform, where Keychain access is not yet implemented.
 #[cfg(target_os = "macos")]
-pub fn safe_storage_key(safe_storage_service: &str) -> Result<Vec<u8>> {
-    let output = Command::new("security")
-        .args(["find-generic-password", "-s", safe_storage_service, "-w"])
-        .output()
-        .map_err(SlackError::Io)?;
+pub fn safe_storage_keys(safe_storage_service: &str) -> Result<Vec<Vec<u8>>> {
+    let mut passwords: Vec<Vec<u8>> = Vec::new();
+    let mut last_error = String::new();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    // Try the account-less lookup first (covers non-Slack browsers with a
+    // single item), then each well-known Slack account name.
+    let mut attempts: Vec<Option<&str>> = vec![None];
+    attempts.extend(KNOWN_SAFE_STORAGE_ACCOUNTS.iter().map(|a| Some(*a)));
+
+    for account in attempts {
+        match read_keychain_password(safe_storage_service, account) {
+            Ok(pw) if !pw.is_empty() => {
+                if !passwords.contains(&pw) {
+                    passwords.push(pw);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => last_error = e,
+        }
+    }
+
+    if passwords.is_empty() {
         return Err(SlackError::Other(format!(
-            "failed to read Keychain password for service '{}': {}",
-            safe_storage_service,
-            stderr.trim()
+            "failed to read any Keychain password for service '{safe_storage_service}': {last_error}"
         )));
     }
 
-    // `security -w` prints the password followed by a newline; strip trailing EOL.
+    Ok(passwords.iter().map(|pw| derive_key(pw)).collect())
+}
+
+/// Read one Keychain generic password, optionally scoped to `account`.
+///
+/// Returns the raw password bytes with any trailing newline stripped. An
+/// unsuccessful lookup (missing item, denied access) is reported as `Err` with
+/// the trimmed stderr so the caller can decide whether other candidates exist.
+#[cfg(target_os = "macos")]
+fn read_keychain_password(
+    service: &str,
+    account: Option<&str>,
+) -> std::result::Result<Vec<u8>, String> {
+    let mut args = vec!["find-generic-password"];
+    if let Some(acct) = account {
+        args.push("-a");
+        args.push(acct);
+    }
+    args.push("-s");
+    args.push(service);
+    args.push("-w");
+
+    let output = Command::new("security")
+        .args(&args)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
     let mut password = output.stdout;
     while matches!(password.last(), Some(b'\n' | b'\r')) {
         password.pop();
     }
-
-    if password.is_empty() {
-        return Err(SlackError::Other(format!(
-            "Keychain returned an empty password for service '{safe_storage_service}'"
-        )));
-    }
-
-    Ok(derive_key(&password))
+    Ok(password)
 }
 
 /// Non-macOS fallback: Keychain-backed key derivation is not implemented yet.
@@ -98,7 +147,7 @@ pub fn safe_storage_key(safe_storage_service: &str) -> Result<Vec<u8>> {
 /// Always returns [`SlackError::Other`]; kept so the crate compiles on every
 /// target.
 #[cfg(not(target_os = "macos"))]
-pub fn safe_storage_key(_safe_storage_service: &str) -> Result<Vec<u8>> {
+pub fn safe_storage_keys(_safe_storage_service: &str) -> Result<Vec<Vec<u8>>> {
     Err(SlackError::Other(
         "browser cookie key derivation is only supported on macOS for now".into(),
     ))

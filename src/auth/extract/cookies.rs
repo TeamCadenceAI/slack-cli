@@ -28,22 +28,36 @@ const SELECT_D_COOKIE: &str = "SELECT encrypted_value FROM cookies \
 /// Read and decrypt the shared Slack `xoxd-` cookie from a Chromium Cookies DB.
 ///
 /// Opens `cookies_db` read-only, selects the encrypted value of the `d` cookie
-/// scoped to a `*.slack.com` host, and decrypts it using `key` (the browser's
-/// "Safe Storage" key derived in [`crate::auth::extract::crypto`]).
+/// scoped to a `*.slack.com` host, and decrypts it by trying each candidate in
+/// `keys` (the browser's `"Safe Storage"` keys derived in
+/// [`crate::auth::extract::crypto`]). A service can hold multiple keys (e.g. the
+/// Slack app's `"Slack Key"` vs `"Slack App Store Key"`), so the first key that
+/// yields a valid `xoxd-` value wins.
 ///
 /// Returns:
 /// - `Ok(Some(value))` when a Slack `d` cookie is present and decrypts.
 /// - `Ok(None)` when the database has no matching cookie row.
-/// - `Err(..)` when the database cannot be read or decryption fails.
+/// - `Err(..)` when the database cannot be read, or none of `keys` decrypt it.
 ///
 /// If the database is locked (e.g. the browser is running), it is copied to a
 /// temporary directory and read from there so the live profile is left
 /// untouched.
-pub fn read_slack_d_cookie(cookies_db: &Path, key: &[u8]) -> Result<Option<String>> {
-    match read_encrypted_d_value(cookies_db)? {
-        Some(encrypted) => Ok(Some(crypto::decrypt_cookie_value(&encrypted, key)?)),
-        None => Ok(None),
+pub fn read_slack_d_cookie(cookies_db: &Path, keys: &[Vec<u8>]) -> Result<Option<String>> {
+    let Some(encrypted) = read_encrypted_d_value(cookies_db)? else {
+        return Ok(None);
+    };
+
+    let mut last_err: Option<SlackError> = None;
+    for key in keys {
+        match crypto::decrypt_cookie_value(&encrypted, key) {
+            Ok(value) => return Ok(Some(value)),
+            Err(e) => last_err = Some(e),
+        }
     }
+
+    Err(last_err.unwrap_or_else(|| {
+        SlackError::Other("no Safe Storage keys were available to decrypt the cookie".into())
+    }))
 }
 
 /// Fetch the raw encrypted `d` cookie value, transparently handling a locked DB.
@@ -215,7 +229,7 @@ mod tests {
         make_cookies_db(&db, &[("app.slack.com", "session", b"y")]);
 
         // No matching row: crypto is never invoked and we get Ok(None).
-        let got = read_slack_d_cookie(&db, &[0u8; 16]).expect("read ok");
+        let got = read_slack_d_cookie(&db, &[vec![0u8; 16]]).expect("read ok");
         assert!(got.is_none());
     }
 
@@ -227,10 +241,38 @@ mod tests {
         // the crypto layer, which is expected to reject the garbage value.
         make_cookies_db(&db, &[("app.slack.com", "d", b"not-really-encrypted")]);
 
-        let result = read_slack_d_cookie(&db, &[0u8; 16]);
+        let result = read_slack_d_cookie(&db, &[vec![0u8; 16]]);
         assert!(
             result.is_err(),
             "decryption of a bogus value should error, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn read_slack_d_cookie_tries_multiple_keys() {
+        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        type Enc = cbc::Encryptor<aes::Aes128>;
+
+        // Encrypt a real xoxd- value under one specific key.
+        let good_key = [0x42u8; 16];
+        let token = b"xoxd-multi-key-test-value";
+        let iv = [b' '; 16];
+        let padded_len = (token.len() / 16 + 1) * 16;
+        let mut buf = vec![0u8; padded_len];
+        buf[..token.len()].copy_from_slice(token);
+        let ct = Enc::new(&good_key.into(), &iv.into())
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, token.len())
+            .unwrap();
+        let mut enc = b"v10".to_vec();
+        enc.extend_from_slice(ct);
+
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("Cookies");
+        make_cookies_db(&db, &[("app.slack.com", "d", &enc)]);
+
+        // A wrong key first, then the correct one: the second should win.
+        let keys = vec![vec![0u8; 16], good_key.to_vec()];
+        let got = read_slack_d_cookie(&db, &keys).expect("read ok");
+        assert_eq!(got.as_deref(), Some("xoxd-multi-key-test-value"));
     }
 }
