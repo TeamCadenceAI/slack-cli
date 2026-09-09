@@ -167,6 +167,14 @@ slack messages search "deploy failed" --in-channel "#ops"
 slack messages search "from:@alice budget"
 ```
 
+Use exclusive UTC `--since`/`--until` bounds on `messages list`; each accepts a
+`YYYY-MM-DD` date, RFC3339 instant, or Slack decimal timestamp. `--all` fetches
+all pages in response order, conflicts with `--cursor`, and ignores a numeric
+`--limit` (its requests use 200-message pages). Add `--resolve-users` to list,
+thread, or search to load the complete paginated user directory once and show
+resolved authors and mentions. Search ordering is selectable with `--sort
+score|timestamp` and `--sort-dir asc|desc`.
+
 ### List and manage channels
 ```bash
 slack channels list

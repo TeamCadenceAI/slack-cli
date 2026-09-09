@@ -267,6 +267,29 @@ slack messages search "in:#general project" --count 50
 slack messages get "C123456789:1234567890.123456"
 ```
 
+#### Bounded and resolved reading
+
+```bash
+# Exclusive UTC bounds: dates, RFC3339 instants, or Slack timestamps
+slack messages list "#general" --since 2026-01-01 --until 2026-02-01
+
+# Fetch complete bounded history; numeric --limit is ignored with --all
+slack messages list "#general" --since 1735689600.000001 --all
+
+# Resolve authors and <@user> mentions in any read command
+slack messages list "#general" --resolve-users
+slack messages thread "#general" 1234567890.123456 --resolve-users
+slack messages search "incident" --sort score --sort-dir desc --resolve-users
+```
+
+`--since` and `--until` are exclusive UTC bounds. A duration `--limit` still
+contributes an oldest bound, and the later of it and `--since` is used.
+`--all` conflicts with `--cursor`, reads pages of 200 in Slack response order,
+and ignores a numeric `--limit`. User resolution loads the complete paginated
+workspace directory once per nonempty command. JSON keeps `user` and adds
+`user_name`; explicitly resolved `--plain` output uses the name in its second
+(author) column and rewrites known mentions while preserving unknown markup.
+
 #### Message formatting
 
 `messages send` treats input as **standard Markdown** by default (`--format

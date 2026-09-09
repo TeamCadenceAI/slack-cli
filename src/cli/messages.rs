@@ -14,6 +14,8 @@ use crate::models::Message;
 use crate::output::{write_json, write_messages_plain, MessagePlain, OutputMode};
 use crate::utils::{parse_time_limit, TimeLimit};
 
+mod read_ops;
+
 /// Message operations commands
 #[derive(Args, Debug)]
 pub struct MessagesCmd {
@@ -38,8 +40,24 @@ pub enum MessagesCommands {
         include_activity: bool,
 
         /// Pagination cursor for next page
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all")]
         cursor: Option<String>,
+
+        /// Read messages newer than this exclusive UTC bound
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Read messages older than this exclusive UTC bound
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Fetch all pages (the numeric --limit is ignored)
+        #[arg(long)]
+        all: bool,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Show thread replies
@@ -61,6 +79,10 @@ pub enum MessagesCommands {
         /// Pagination cursor for next page
         #[arg(long)]
         cursor: Option<String>,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Send a message
@@ -130,6 +152,18 @@ pub enum MessagesCommands {
         /// Page number (1-indexed)
         #[arg(long, default_value = "1")]
         page: u32,
+
+        /// Result ordering field
+        #[arg(long, value_enum, default_value = "timestamp")]
+        sort: SearchSort,
+
+        /// Result ordering direction
+        #[arg(long, value_enum, default_value = "desc")]
+        sort_dir: SearchSortDirection,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Get a single message by URL or channel:timestamp
@@ -137,6 +171,44 @@ pub enum MessagesCommands {
         /// Message identifier: permalink URL or "channel:timestamp" format
         message: String,
     },
+}
+
+/// Search result ordering fields.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum SearchSort {
+    /// Order by Slack relevance score.
+    Score,
+    /// Order by message timestamp.
+    #[default]
+    Timestamp,
+}
+
+impl SearchSort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Score => "score",
+            Self::Timestamp => "timestamp",
+        }
+    }
+}
+
+/// Search result ordering directions.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum SearchSortDirection {
+    /// Oldest or lowest-score results first.
+    Asc,
+    /// Newest or highest-score results first.
+    #[default]
+    Desc,
+}
+
+impl SearchSortDirection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
 }
 
 /// Message format options
@@ -168,16 +240,21 @@ pub async fn run(
             limit,
             include_activity,
             cursor,
+            since,
+            until,
+            all,
+            resolve_users,
         } => {
-            list_messages(
-                &client,
-                channel,
+            let options = ListOptions {
                 limit,
-                *include_activity,
-                cursor.as_deref(),
-                output_mode,
-            )
-            .await?;
+                include_activity: *include_activity,
+                cursor: cursor.as_deref(),
+                since: since.as_deref(),
+                until: until.as_deref(),
+                all: *all,
+                resolve_users: *resolve_users,
+            };
+            list_messages(&client, channel, options, output_mode).await?;
         }
 
         MessagesCommands::Thread {
@@ -186,17 +263,15 @@ pub async fn run(
             limit,
             include_activity,
             cursor,
+            resolve_users,
         } => {
-            thread_replies(
-                &client,
-                channel,
-                thread_ts,
+            let options = ThreadOptions {
                 limit,
-                *include_activity,
-                cursor.as_deref(),
-                output_mode,
-            )
-            .await?;
+                include_activity: *include_activity,
+                cursor: cursor.as_deref(),
+                resolve_users: *resolve_users,
+            };
+            thread_replies(&client, channel, thread_ts, options, output_mode).await?;
         }
 
         MessagesCommands::Send {
@@ -231,6 +306,9 @@ pub async fn run(
             threads_only,
             count,
             page,
+            sort,
+            sort_dir,
+            resolve_users,
         } => {
             let query_params = SearchQueryParams {
                 query,
@@ -246,6 +324,9 @@ pub async fn run(
                 query_params,
                 count: *count,
                 page: *page,
+                sort: *sort,
+                sort_dir: *sort_dir,
+                resolve_users: *resolve_users,
             };
             search_messages(&client, search_params, output_mode).await?;
         }
@@ -258,112 +339,135 @@ pub async fn run(
     Ok(())
 }
 
-/// List messages in a channel
+/// Options for a channel history read.
+struct ListOptions<'a> {
+    limit: &'a str,
+    include_activity: bool,
+    cursor: Option<&'a str>,
+    since: Option<&'a str>,
+    until: Option<&'a str>,
+    all: bool,
+    resolve_users: bool,
+}
+
+/// List messages in a channel.
 async fn list_messages(
     client: &SlackClient,
     channel: &str,
-    limit_str: &str,
-    include_activity: bool,
-    cursor: Option<&str>,
+    options: ListOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // Resolve channel name to ID
+    let time_limit = parse_time_limit(options.limit)?;
+    let (oldest, latest) = read_ops::list_bounds(&time_limit, options.since, options.until)?;
     let channel_id = client.resolve_channel(channel).await?;
 
-    // Parse the limit
-    let time_limit = parse_time_limit(limit_str)?;
-
-    let mut params = ConversationsHistoryParams::new(&channel_id);
-
-    match &time_limit {
-        TimeLimit::Count(count) => {
-            params = params.with_limit(*count);
-        }
-        TimeLimit::Timestamp(ts) => {
-            params = params.with_oldest(ts);
-            // When using timestamp, get up to 100 messages per page
-            params = params.with_limit(100);
-        }
-    }
-
-    if let Some(c) = cursor {
-        params = params.with_cursor(c);
-    }
-
-    let response = client.conversations_history(params).await?;
-
-    // Filter out activity messages if not requested
-    let messages: Vec<Message> = if include_activity {
-        response.messages
+    let (messages, has_more, response_metadata) = if options.all {
+        let messages = client
+            .conversations_history_all(&channel_id, oldest.as_deref(), latest.as_deref())
+            .await?;
+        (messages, false, None)
     } else {
-        response
-            .messages
-            .into_iter()
-            .filter(|m| !is_activity_message(m))
-            .collect()
+        let mut params = ConversationsHistoryParams::new(&channel_id);
+        params = match &time_limit {
+            TimeLimit::Count(count) => params.with_limit(*count),
+            TimeLimit::Timestamp(_) => params.with_limit(100),
+        };
+        if let Some(oldest) = &oldest {
+            params = params.with_oldest(oldest);
+        }
+        if let Some(latest) = &latest {
+            params = params.with_latest(latest);
+        }
+        if let Some(cursor) = options.cursor {
+            params = params.with_cursor(cursor);
+        }
+
+        let response = client.conversations_history(params).await?;
+        (
+            response.messages,
+            response.has_more,
+            response.response_metadata,
+        )
     };
 
+    let messages = filter_activity(messages, options.include_activity);
+    let directory = load_user_directory(client, options.resolve_users, messages.is_empty()).await?;
     output_messages(
         &messages,
         &channel_id,
         output_mode,
-        response.has_more,
-        response.response_metadata,
-    )?;
-
-    Ok(())
+        has_more,
+        response_metadata,
+        directory.as_ref(),
+    )
 }
 
-/// Show thread replies
+/// Options for reading one page of thread replies.
+struct ThreadOptions<'a> {
+    limit: &'a str,
+    include_activity: bool,
+    cursor: Option<&'a str>,
+    resolve_users: bool,
+}
+
+/// Show thread replies.
 async fn thread_replies(
     client: &SlackClient,
     channel: &str,
     thread_ts: &str,
-    limit_str: &str,
-    include_activity: bool,
-    cursor: Option<&str>,
+    options: ThreadOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let time_limit = parse_time_limit(options.limit)?;
     let channel_id = client.resolve_channel(channel).await?;
-    let time_limit = parse_time_limit(limit_str)?;
-
     let mut params = ConversationsRepliesParams::new(&channel_id, thread_ts);
 
-    match &time_limit {
-        TimeLimit::Count(count) => {
-            params = params.with_limit(*count);
-        }
-        TimeLimit::Timestamp(_ts) => {
-            // Note: conversations.replies doesn't support oldest/latest, so we use limit
-            params = params.with_limit(100);
-        }
-    }
+    params = match &time_limit {
+        TimeLimit::Count(count) => params.with_limit(*count),
+        // conversations.replies does not support duration limits; preserve the
+        // existing page-size behavior.
+        TimeLimit::Timestamp(_) => params.with_limit(100),
+    };
 
-    if let Some(c) = cursor {
-        params = params.with_cursor(c);
+    if let Some(cursor) = options.cursor {
+        params = params.with_cursor(cursor);
     }
 
     let response = client.conversations_replies(params).await?;
-
-    let messages: Vec<Message> = if include_activity {
-        response.messages
-    } else {
-        response
-            .messages
-            .into_iter()
-            .filter(|m| !is_activity_message(m))
-            .collect()
-    };
-
+    let messages = filter_activity(response.messages, options.include_activity);
+    let directory = load_user_directory(client, options.resolve_users, messages.is_empty()).await?;
     output_messages(
         &messages,
         &channel_id,
         output_mode,
         response.has_more,
         response.response_metadata,
-    )?;
+        directory.as_ref(),
+    )
+}
 
-    Ok(())
+fn filter_activity(messages: Vec<Message>, include_activity: bool) -> Vec<Message> {
+    if include_activity {
+        messages
+    } else {
+        messages
+            .into_iter()
+            .filter(|message| !is_activity_message(message))
+            .collect()
+    }
+}
+
+async fn load_user_directory(
+    client: &SlackClient,
+    resolve_users: bool,
+    messages_empty: bool,
+) -> Result<Option<read_ops::UserDirectory>> {
+    if !resolve_users || messages_empty {
+        return Ok(None);
+    }
+    Ok(Some(read_ops::UserDirectory::from_users(
+        client.users_list_all().await?,
+    )))
 }
 
 /// Send a message
@@ -525,6 +629,9 @@ struct SearchParams<'a> {
     query_params: SearchQueryParams<'a>,
     count: u32,
     page: u32,
+    sort: SearchSort,
+    sort_dir: SearchSortDirection,
+    resolve_users: bool,
 }
 
 /// Search messages
@@ -544,32 +651,22 @@ async fn search_messages(
     let api_params = SearchMessagesParams::new(&full_query)
         .with_count(params.count)
         .with_page(params.page)
-        .with_sort("timestamp", "desc");
+        .with_sort(params.sort.as_str(), params.sort_dir.as_str());
 
     let response = client.search_messages(api_params).await?;
-
-    if output_mode == OutputMode::Plain {
-        let plain_messages: Vec<MessagePlain> = response
-            .messages
-            .matches
-            .iter()
-            .map(|m| MessagePlain {
-                timestamp: &m.ts,
-                user_id: m.user.as_deref().unwrap_or(""),
-                channel: m.channel.as_ref().map(|c| c.id.as_str()).unwrap_or(""),
-                text: m.text.as_deref().unwrap_or(""),
-            })
-            .collect();
-        write_messages_plain(&plain_messages)?;
-    } else {
-        write_json(&serde_json::json!({
-            "total": response.messages.total,
-            "pagination": response.messages.pagination,
-            "messages": response.messages.matches,
-        }))?;
-    }
-
-    Ok(())
+    let directory = load_user_directory(
+        client,
+        params.resolve_users,
+        response.messages.matches.is_empty(),
+    )
+    .await?;
+    output_search_messages(
+        &response.messages.matches,
+        response.messages.total,
+        response.messages.pagination,
+        output_mode,
+        directory.as_ref(),
+    )
 }
 
 /// Get a single message by URL or channel:timestamp
@@ -737,27 +834,107 @@ fn output_messages(
     output_mode: OutputMode,
     has_more: bool,
     response_metadata: Option<crate::api::ResponseMetadata>,
+    directory: Option<&read_ops::UserDirectory>,
 ) -> Result<()> {
-    if output_mode == OutputMode::Plain {
+    if let Some(directory) = directory {
+        let resolved = directory.resolve_texts(messages);
+        if output_mode == OutputMode::Plain {
+            write_plain_messages(&resolved, channel_id, directory)
+        } else {
+            write_json(&serde_json::json!({
+                "messages": read_ops::resolved_views(&resolved, directory),
+                "has_more": has_more,
+                "response_metadata": response_metadata,
+            }))
+        }
+    } else if output_mode == OutputMode::Plain {
         let plain_messages: Vec<MessagePlain> = messages
             .iter()
-            .map(|m| MessagePlain {
-                timestamp: &m.ts,
-                user_id: m.user.as_deref().unwrap_or(""),
+            .map(|message| MessagePlain {
+                timestamp: &message.ts,
+                user_id: message.user.as_deref().unwrap_or(""),
                 channel: channel_id,
-                text: m.text.as_deref().unwrap_or(""),
+                text: message.text.as_deref().unwrap_or(""),
             })
             .collect();
-        write_messages_plain(&plain_messages)?;
+        write_messages_plain(&plain_messages)
     } else {
         write_json(&serde_json::json!({
             "messages": messages,
             "has_more": has_more,
             "response_metadata": response_metadata,
-        }))?;
+        }))
     }
+}
 
-    Ok(())
+fn write_plain_messages(
+    messages: &[Message],
+    default_channel: &str,
+    directory: &read_ops::UserDirectory,
+) -> Result<()> {
+    // The shared TSV writer handles tabs and line feeds. Normalize carriage
+    // returns here as well so resolved output remains exactly four columns.
+    let texts: Vec<String> = messages
+        .iter()
+        .map(|message| message.text.as_deref().unwrap_or("").replace('\r', "\\r"))
+        .collect();
+    let plain_messages: Vec<MessagePlain> = messages
+        .iter()
+        .zip(&texts)
+        .map(|(message, text)| MessagePlain {
+            timestamp: &message.ts,
+            user_id: directory.name_for(message.user.as_deref()).unwrap_or(""),
+            channel: message
+                .channel
+                .as_ref()
+                .map(|channel| channel.id.as_str())
+                .unwrap_or(default_channel),
+            text,
+        })
+        .collect();
+    write_messages_plain(&plain_messages)
+}
+
+fn output_search_messages(
+    messages: &[Message],
+    total: u32,
+    pagination: Option<crate::api::SearchPagination>,
+    output_mode: OutputMode,
+    directory: Option<&read_ops::UserDirectory>,
+) -> Result<()> {
+    if let Some(directory) = directory {
+        let resolved = directory.resolve_texts(messages);
+        if output_mode == OutputMode::Plain {
+            write_plain_messages(&resolved, "", directory)
+        } else {
+            write_json(&serde_json::json!({
+                "total": total,
+                "pagination": pagination,
+                "messages": read_ops::resolved_views(&resolved, directory),
+            }))
+        }
+    } else if output_mode == OutputMode::Plain {
+        let plain_messages: Vec<MessagePlain> = messages
+            .iter()
+            .map(|message| MessagePlain {
+                timestamp: &message.ts,
+                user_id: message.user.as_deref().unwrap_or(""),
+                channel: message
+                    .channel
+                    .as_ref()
+                    .map(|channel| channel.id.as_str())
+                    .unwrap_or(""),
+                text: message.text.as_deref().unwrap_or(""),
+            })
+            .collect();
+        write_messages_plain(&plain_messages)
+    } else {
+        write_json(&serde_json::json!({
+            "total": total,
+            "pagination": pagination,
+            "messages": messages,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -775,18 +952,68 @@ mod tests {
                 limit,
                 include_activity,
                 cursor,
+                since,
+                until,
+                all,
+                resolve_users,
             } = cmd.command
             {
                 assert_eq!(channel, "general");
                 assert_eq!(limit, "50");
                 assert!(!include_activity);
                 assert!(cursor.is_none());
+                assert!(since.is_none());
+                assert!(until.is_none());
+                assert!(!all);
+                assert!(!resolve_users);
             } else {
                 panic!("Expected List command");
             }
         } else {
             panic!("Expected Messages command");
         }
+    }
+
+    #[test]
+    fn test_parse_messages_list_read_options() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "list",
+            "general",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-02-01",
+            "--all",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::List {
+                since,
+                until,
+                all,
+                resolve_users,
+                ..
+            } = cmd.command
+            {
+                assert_eq!(since.as_deref(), Some("2025-01-01"));
+                assert_eq!(until.as_deref(), Some("2025-02-01"));
+                assert!(all);
+                assert!(resolve_users);
+            } else {
+                panic!("Expected List command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_messages_list_all_conflicts_with_cursor() {
+        assert!(Cli::try_parse_from([
+            "slack", "messages", "list", "general", "--all", "--cursor", "next"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -862,6 +1089,26 @@ mod tests {
             }
         } else {
             panic!("Expected Messages command");
+        }
+    }
+
+    #[test]
+    fn test_parse_messages_thread_resolve_users() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "thread",
+            "general",
+            "1234567890.123456",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::Thread { resolve_users, .. } = cmd.command {
+                assert!(resolve_users);
+            } else {
+                panic!("Expected Thread command");
+            }
         }
     }
 
@@ -984,18 +1231,71 @@ mod tests {
         let cli = Cli::try_parse_from(["slack", "messages", "search", "hello world"]).unwrap();
         if let crate::cli::Commands::Messages(cmd) = cli.command {
             if let MessagesCommands::Search {
-                query, count, page, ..
+                query,
+                count,
+                page,
+                sort,
+                sort_dir,
+                resolve_users,
+                ..
             } = cmd.command
             {
                 assert_eq!(query, "hello world");
                 assert_eq!(count, 20);
                 assert_eq!(page, 1);
+                assert!(matches!(sort, SearchSort::Timestamp));
+                assert!(matches!(sort_dir, SearchSortDirection::Desc));
+                assert!(!resolve_users);
             } else {
                 panic!("Expected Search command");
             }
         } else {
             panic!("Expected Messages command");
         }
+    }
+
+    #[test]
+    fn test_parse_messages_search_sort_and_resolution() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "search",
+            "hello",
+            "--sort",
+            "score",
+            "--sort-dir",
+            "asc",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::Search {
+                sort,
+                sort_dir,
+                resolve_users,
+                ..
+            } = cmd.command
+            {
+                assert!(matches!(sort, SearchSort::Score));
+                assert!(matches!(sort_dir, SearchSortDirection::Asc));
+                assert!(resolve_users);
+            } else {
+                panic!("Expected Search command");
+            }
+        }
+        assert!(
+            Cli::try_parse_from(["slack", "messages", "search", "hello", "--sort", "newest"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "slack",
+            "messages",
+            "search",
+            "hello",
+            "--sort-dir",
+            "sideways"
+        ])
+        .is_err());
     }
 
     #[test]

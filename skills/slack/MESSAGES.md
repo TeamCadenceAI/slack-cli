@@ -22,7 +22,22 @@ slack messages list "#general" --include-activity
 
 # Paginate
 slack messages list "#general" --cursor <cursor_from_response>
+
+# Exclusive UTC bounds (date, RFC3339, or Slack timestamp)
+slack messages list "#general" --since 2026-01-01 --until 2026-02-01
+slack messages list "#general" --since 2026-01-01T09:30:00-05:00
+slack messages list "#general" --since 1767225600.000001
+
+# Fetch every page and optionally resolve authors and mentions
+slack messages list "#general" --all --resolve-users
 ```
+
+`--since` and `--until` are exclusive UTC bounds. When a duration-style
+`--limit` and `--since` are both present, the later oldest bound wins.
+Without `--all`, `--limit` keeps its existing page-size behavior and bounds
+are sent with any cursor. `--all` conflicts with `--cursor`, fetches pages of
+200 in Slack response order, and ignores a numeric `--limit`; activity
+messages are still filtered unless `--include-activity` is set.
 
 ## Get a single message
 
@@ -107,6 +122,12 @@ slack messages search "decision" --threads-only
 
 # Pagination
 slack messages search "query" --count 50 --page 2
+
+# Sort by relevance, oldest score first
+slack messages search "query" --sort score --sort-dir asc
+
+# Defaults are newest timestamp first
+slack messages search "query" --sort timestamp --sort-dir desc
 ```
 
 ## Output
@@ -120,13 +141,22 @@ slack --plain messages search "hello"
 
 ## Resolving user IDs in output
 
-Message JSON includes `user` as a Slack user ID (e.g. `U090BKEQXMH`). Resolve it
-to a display name with the CLI:
+List, thread, and search can resolve message authors and user mentions:
 
 ```bash
-slack users info U090BKEQXMH               # full user record (JSON)
-slack --plain users info U090BKEQXMH       # TSV
+slack messages list "#general" --resolve-users
+slack messages thread C1234567890 1234567890.123456 --resolve-users
+slack messages search "review" --resolve-users
 ```
 
-Note: with browser tokens, `real_name` may be empty — prefer the profile's
-`display_name`, falling back to `real_name`.
+For each nonempty invocation, `--resolve-users` traverses the complete
+paginated `users.list` directory exactly once, not once per message. It prefers
+a nonempty username, then the user's display name, and finally the ID. Known
+`<@U…>` and `<@U…|label>` mentions become `@name`; unknown mention tokens and
+unrelated mrkdwn remain unchanged. A directory API error fails the command.
+
+Resolved JSON preserves the original `user` ID and adds `user_name` (`null`
+when the message has no user, with the ID as fallback for an unknown user).
+Without the flag, JSON is unchanged. Plain output always has four TSV columns
+(timestamp, author, channel, text); its author column changes from ID to name
+only when `--resolve-users` is explicitly requested.

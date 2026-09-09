@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Message reading**: read exclusive date/timestamp-bounded channel history,
+  collect all history pages, resolve authors and mentions from one paginated
+  user-directory traversal, and select search result sort order.
 - **Channels**: list and resolve channel members, create and manage channel
   lifecycle and membership, and show a capability-dependent Web API unread
   overview with unavailable-count reporting.
