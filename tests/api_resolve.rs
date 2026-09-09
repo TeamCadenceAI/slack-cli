@@ -3,6 +3,21 @@
 //! Tests using mockito to simulate Slack API responses.
 
 use mockito::{Matcher, Server};
+use slack_cli::{api::SlackClient, auth::TokenSet, error::SlackError};
+
+const TOKEN: &str = "xoxp-test-token-12345678901234";
+
+fn test_client(base_url: String) -> SlackClient {
+    let token = TokenSet::new_oauth(
+        TOKEN.to_string(),
+        "T12345678".to_string(),
+        "test".to_string(),
+        "U00000000".to_string(),
+        vec![],
+    )
+    .unwrap();
+    SlackClient::with_base_url(token, base_url).unwrap()
+}
 
 // Note: These tests require creating a SlackClient with a custom base URL,
 // which is not currently supported. For now, we test the ID detection logic
@@ -363,4 +378,67 @@ mod mock_api_tests {
 
         // Would test: resolve_user("bob") returns "U222222222" after pagination
     }
+}
+
+#[tokio::test]
+async fn resolve_channel_finds_name_on_second_page() {
+    let mut server = Server::new_async().await;
+    let first = server
+        .mock("POST", "/conversations.list")
+        .match_body(Matcher::Exact(
+            "exclude_archived=false&limit=200&types=public_channel%2Cprivate_channel%2Cmpim%2Cim"
+                .to_string(),
+        ))
+        .with_body(
+            r#"{"ok":true,"channels":[{"id":"C11111111","name":"random"}],"response_metadata":{"next_cursor":"c2"}}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+    let second = server
+        .mock("POST", "/conversations.list")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("cursor".into(), "c2".into()),
+            Matcher::UrlEncoded("limit".into(), "200".into()),
+        ]))
+        .with_body(
+            r#"{"ok":true,"channels":[{"id":"C22222222","name":"general"}],"response_metadata":{"next_cursor":""}}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+    let client = test_client(server.url());
+
+    assert_eq!(
+        client.resolve_channel("#general").await.unwrap(),
+        "C22222222"
+    );
+    first.assert_async().await;
+    second.assert_async().await;
+}
+
+#[tokio::test]
+async fn resolve_channel_empty_next_cursor_stops_with_not_found() {
+    let mut server = Server::new_async().await;
+    let list = server
+        .mock("POST", "/conversations.list")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("limit".into(), "200".into()),
+            Matcher::UrlEncoded("exclude_archived".into(), "false".into()),
+            Matcher::UrlEncoded(
+                "types".into(),
+                "public_channel,private_channel,mpim,im".into(),
+            ),
+        ]))
+        .with_body(
+            r#"{"ok":true,"channels":[{"id":"C11111111","name":"random"}],"response_metadata":{"next_cursor":""}}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+    let client = test_client(server.url());
+
+    let error = client.resolve_channel("missing").await.unwrap_err();
+    assert!(matches!(error, SlackError::ChannelNotFound(name) if name == "missing"));
+    list.assert_async().await;
 }
