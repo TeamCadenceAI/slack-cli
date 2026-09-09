@@ -221,30 +221,58 @@ impl OAuthFlow {
     /// 5. Exchange code for tokens
     pub fn authorize_manual(&self) -> Result<TokenSet> {
         let state = Self::generate_state();
-        let auth_url = self.build_auth_url(&state)?;
+        let stdin = io::stdin();
+        self.authorize_manual_with(stdin.lock(), &state, |_| Ok(()))
+    }
+
+    /// Run the manual flow with injectable input and URL handling.
+    ///
+    /// The callback is deliberately a no-op in the production wrapper: manual mode prints the
+    /// authorization URL but never opens a browser automatically. Keeping it injectable lets the
+    /// flow be exercised without touching a real browser.
+    fn authorize_manual_with<R, F>(
+        &self,
+        mut reader: R,
+        state: &str,
+        mut browser_opener: F,
+    ) -> Result<TokenSet>
+    where
+        R: BufRead,
+        F: FnMut(&str) -> Result<()>,
+    {
+        let auth_url = self.build_auth_url(state)?;
 
         eprintln!("\n=== Manual OAuth Flow ===\n");
         eprintln!("1. Open this URL in your browser:\n");
         eprintln!("   {}\n", auth_url);
         eprintln!("2. Authorize the application");
         eprintln!("3. You'll be redirected to a localhost URL (may show an error page)");
-        eprintln!("4. Copy the FULL URL from your browser's address bar");
+        eprintln!("4. Copy the FULL URL from your browser's address bar (or just the code)");
         eprintln!("\nPaste the redirect URL here:");
+        browser_opener(&auth_url)?;
 
         io::stdout().flush().map_err(SlackError::Io)?;
 
-        let mut redirect_url = String::new();
-        io::stdin()
-            .lock()
-            .read_line(&mut redirect_url)
-            .map_err(SlackError::Io)?;
+        let mut input = String::new();
+        reader.read_line(&mut input).map_err(SlackError::Io)?;
 
-        let redirect_url = redirect_url.trim();
-        if redirect_url.is_empty() {
-            return Err(SlackError::Usage("No URL provided".into()));
+        let input = input.trim();
+        if input.is_empty() {
+            return Err(SlackError::Usage("No URL or code provided".into()));
         }
 
-        // Parse the URL and extract code and state
+        // Slack may display the code separately when localhost cannot be reached. Accept that
+        // value directly; full redirect URLs retain state verification and OAuth error handling.
+        let code = if input.starts_with("http://") || input.starts_with("https://") {
+            Self::code_from_redirect_url(input, state)?
+        } else {
+            input.to_string()
+        };
+
+        self.exchange_code(&code)
+    }
+
+    fn code_from_redirect_url(redirect_url: &str, expected_state: &str) -> Result<String> {
         let url = Url::parse(redirect_url)
             .map_err(|e| SlackError::Usage(format!("Invalid URL: {}", e)))?;
 
@@ -270,9 +298,8 @@ impl OAuthFlow {
             }
         }
 
-        // Verify state
         match returned_state {
-            Some(ref s) if s == &state => {}
+            Some(ref state) if state == expected_state => {}
             Some(_) => {
                 return Err(SlackError::Other(
                     "State mismatch - possible CSRF attack".into(),
@@ -285,11 +312,7 @@ impl OAuthFlow {
             }
         }
 
-        let code =
-            code.ok_or_else(|| SlackError::Usage("No authorization code in redirect URL".into()))?;
-
-        // Exchange the code for tokens
-        self.exchange_code(&code)
+        code.ok_or_else(|| SlackError::Usage("No authorization code in redirect URL".into()))
     }
 
     /// Exchange authorization code for access tokens
@@ -715,5 +738,261 @@ mod tests {
             }
             _ => panic!("Expected SlackError::Other"),
         }
+    }
+
+    fn test_flow(token_url: String, port: u16) -> OAuthFlow {
+        OAuthFlow::new(
+            OAuthConfig::new("client-id".into(), "client-secret".into())
+                .with_port(port)
+                .with_token_url(token_url),
+        )
+    }
+
+    #[test]
+    fn exchange_code_posts_form_and_maps_success() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/oauth.v2.access")
+            .match_header("content-type", "application/x-www-form-urlencoded")
+            .match_body(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("client_id".into(), "client-id".into()),
+                Matcher::UrlEncoded("client_secret".into(), "client-secret".into()),
+                Matcher::UrlEncoded("code".into(), "oauth-code".into()),
+                Matcher::UrlEncoded(
+                    "redirect_uri".into(),
+                    "http://localhost:9123/callback".into(),
+                ),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "ok": true,
+                    "access_token": "xoxb-test-access-token",
+                    "scope": "channels:read,chat:write",
+                    "bot_user_id": "UBOT",
+                    "team": {"id": "TTEAM", "name": "OAuth Team"}
+                }"#,
+            )
+            .create();
+        let flow = test_flow(format!("{}/oauth.v2.access", server.url()), 9123);
+
+        let token = flow.exchange_code("oauth-code").unwrap();
+
+        mock.assert();
+        assert_eq!(token.access_token, "xoxb-test-access-token");
+        assert_eq!(token.team_id, "TTEAM");
+        assert_eq!(token.team_name, "OAuth Team");
+        assert_eq!(token.user_id, "UBOT");
+        assert_eq!(token.scopes, ["channels:read", "chat:write"]);
+    }
+
+    #[test]
+    fn exchange_code_maps_slack_error() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/oauth.v2.access")
+            .match_body(Matcher::UrlEncoded("code".into(), "bad-code".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":false,"error":"invalid_code"}"#)
+            .create();
+        let flow = test_flow(format!("{}/oauth.v2.access", server.url()), 8765);
+
+        let error = flow.exchange_code("bad-code").unwrap_err();
+
+        mock.assert();
+        match error {
+            SlackError::Api { error, detail } => {
+                assert_eq!(error, "invalid_code");
+                assert_eq!(detail, None);
+            }
+            other => panic!("expected API error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_oauth_response_uses_safe_error() {
+        let error = parse_oauth_response(&serde_json::json!({"unexpected": true})).unwrap_err();
+        match error {
+            SlackError::Api { error, detail } => {
+                assert_eq!(error, "unknown_error");
+                assert_eq!(detail, None);
+            }
+            other => panic!("expected API error, got {other:?}"),
+        }
+    }
+
+    fn unused_local_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    fn request_callback(path: &str, expected_state: &str) -> (u16, String, Result<String>) {
+        let port = unused_local_port();
+        let (tx, rx) = mpsc::channel();
+        let expected_state = expected_state.to_string();
+        let handle = thread::spawn(move || start_callback_server(port, &expected_state, tx));
+        let url = format!("http://127.0.0.1:{port}{path}");
+        let client = reqwest::blocking::Client::new();
+
+        let response = (0..20)
+            .find_map(|_| match client.get(&url).send() {
+                Ok(response) => Some(response),
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(10));
+                    None
+                }
+            })
+            .expect("callback server did not start");
+        let status = response.status().as_u16();
+        let body = response.text().unwrap();
+        let callback = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        handle.join().unwrap().unwrap();
+
+        (status, body, callback)
+    }
+
+    #[test]
+    fn callback_server_returns_code_and_success_html() {
+        let (status, body, callback) =
+            request_callback("/callback?code=code-123&state=expected", "expected");
+
+        assert_eq!(status, 200);
+        assert!(body.contains("Authorization Successful"));
+        assert_eq!(callback.unwrap(), "code-123");
+    }
+
+    #[test]
+    fn callback_server_rejects_state_mismatch_with_html() {
+        let (status, body, callback) =
+            request_callback("/callback?code=code-123&state=wrong", "expected");
+
+        assert_eq!(status, 400);
+        assert!(body.contains("State mismatch"));
+        match callback.unwrap_err() {
+            SlackError::Other(message) => assert_eq!(message, "State mismatch"),
+            other => panic!("expected state error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn callback_server_returns_oauth_denial_and_html() {
+        let (status, body, callback) = request_callback(
+            "/callback?error=access_denied&error_description=User%20declined",
+            "expected",
+        );
+
+        assert_eq!(status, 400);
+        assert!(body.contains("Authorization failed"));
+        match callback.unwrap_err() {
+            SlackError::Api { error, detail } => {
+                assert_eq!(error, "access_denied");
+                assert_eq!(detail.as_deref(), Some("User declined"));
+            }
+            other => panic!("expected API error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn callback_server_reports_bind_failure() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, _rx) = mpsc::channel();
+
+        let error = start_callback_server(port, "state", tx).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Failed to start callback server"));
+    }
+
+    fn oauth_success_mock(server: &mut mockito::Server, expected_code: &str) -> mockito::Mock {
+        use mockito::Matcher;
+
+        server
+            .mock("POST", "/oauth.v2.access")
+            .match_body(Matcher::UrlEncoded(
+                "code".into(),
+                expected_code.to_string(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "ok": true,
+                    "access_token": "xoxp-manual-access-token",
+                    "scope": "users:read",
+                    "authed_user": {"id": "UMANUAL"},
+                    "team": {"id": "TMANUAL", "name": "Manual Team"}
+                }"#,
+            )
+            .create()
+    }
+
+    #[test]
+    fn manual_authorization_accepts_pasted_code_without_opening_browser() {
+        let mut server = mockito::Server::new();
+        let mock = oauth_success_mock(&mut server, "pasted-code");
+        let flow = test_flow(format!("{}/oauth.v2.access", server.url()), 8765);
+        let input = io::Cursor::new(b"pasted-code\n");
+        let mut presented_url = None;
+
+        let token = flow
+            .authorize_manual_with(input, "known-state", |url| {
+                presented_url = Some(url.to_string());
+                Ok(())
+            })
+            .unwrap();
+
+        mock.assert();
+        assert_eq!(token.access_token, "xoxp-manual-access-token");
+        assert!(presented_url.unwrap().contains("state=known-state"));
+    }
+
+    #[test]
+    fn manual_authorization_accepts_full_redirect_url() {
+        let mut server = mockito::Server::new();
+        let mock = oauth_success_mock(&mut server, "url-code");
+        let flow = test_flow(format!("{}/oauth.v2.access", server.url()), 8765);
+        let input =
+            io::Cursor::new(b"http://localhost:8765/callback?code=url-code&state=known-state\n");
+
+        let token = flow
+            .authorize_manual_with(input, "known-state", |_| Ok(()))
+            .unwrap();
+
+        mock.assert();
+        assert_eq!(token.team_id, "TMANUAL");
+        assert_eq!(token.user_id, "UMANUAL");
+    }
+
+    #[test]
+    fn manual_redirect_validation_errors_are_preserved() {
+        let missing_state =
+            OAuthFlow::code_from_redirect_url("http://localhost/callback?code=code", "expected")
+                .unwrap_err();
+        assert!(matches!(missing_state, SlackError::Usage(_)));
+
+        let wrong_state = OAuthFlow::code_from_redirect_url(
+            "http://localhost/callback?code=code&state=wrong",
+            "expected",
+        )
+        .unwrap_err();
+        assert!(matches!(wrong_state, SlackError::Other(_)));
+
+        let denied = OAuthFlow::code_from_redirect_url(
+            "http://localhost/callback?error=access_denied&error_description=Nope&state=expected",
+            "expected",
+        )
+        .unwrap_err();
+        assert!(matches!(denied, SlackError::Api { .. }));
     }
 }
