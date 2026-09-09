@@ -1,6 +1,6 @@
 ---
 name: slack
-description: Send and read Slack messages, search conversations, manage channels, users, files, reactions, status, and reminders across multiple workspaces. Use when the user wants to interact with Slack — post a message, check recent messages, search for something, or work with a specific workspace/team by name. Can discover and connect workspaces the user is already signed into locally (desktop app or browser).
+description: Send and read Slack messages; DM @users; edit, delete, schedule, and search messages; manage channels, user groups, file uploads, file search, pins, bookmarks, custom emoji, reactions, status, and reminders across workspaces. Use when the user wants to interact with Slack or connect a locally signed-in workspace.
 license: MIT
 compatibility: Requires the slack CLI. If not installed, direct the user to https://github.com/TeamCadenceAI/slack-cli
 allowed-tools: Bash(slack:*) Bash(jq:*)
@@ -173,8 +173,11 @@ slack messages send "#general" "Fallback" --blocks blocks.json
 slack messages send "#general" "Reply" --thread-ts 1234567890.123456 --broadcast
 slack messages send "#general" "Tomorrow" --schedule "tomorrow at 9am"
 slack messages edit "#general:1234567890.123456" "Corrected text"
+slack messages delete "#general:1234567890.123456"
 slack messages permalink "#general:1234567890.123456"
+slack messages mark "#general" 1234567890.123456
 slack messages scheduled list
+slack messages scheduled delete "#general" Q123456789
 ```
 
 Natural schedule expressions use local time and must be future times within
@@ -258,6 +261,7 @@ type). Missing scopes are reported as Slack API errors. See [USERS.md](USERS.md)
 ### Manage pins
 ```bash
 slack pins add "#general" 1234567890.123456
+slack pins remove "#general" 1234567890.123456
 slack pins list "#general"
 ```
 
@@ -289,15 +293,31 @@ slack status set "In a meeting" --emoji meeting --expires 1h
 slack status clear
 ```
 
+### Upload and search files
+```bash
+# Upload; the path basename is used unless --filename is supplied
+slack files upload ./report.pdf --channel general --title "Quarterly report"
+
+# --comment and --thread-ts require --channel
+slack files upload ./notes.txt --channel C123456789 \
+  --comment "Meeting notes" --thread-ts 1234567890.123456
+
+# Search requires a user OAuth or stored browser token (not a bot token)
+slack files search "quarterly report" --count 20 --page 1
+```
+
+Uploads require `files:write`; searches require `search:read`. See
+[FILES.md](FILES.md) for validation, output, and authentication details.
+
 ## Command reference files
 
 | File | Commands |
 |------|----------|
 | [AUTH.md](AUTH.md) | `auth add/discover/list/remove/status/switch/browser-help` |
-| [CHANNELS.md](CHANNELS.md) | `channels list/info/dms/export` |
-| [MESSAGES.md](MESSAGES.md) | `messages list/send/search/thread/get` |
-| [USERS.md](USERS.md) | `users list/info/me/groups/export` |
-| [FILES.md](FILES.md) | `files list/info/get` |
+| [CHANNELS.md](CHANNELS.md) | `channels list/info/dms/members/create/join/leave/archive/unarchive/invite/set-topic/set-purpose/rename/unread/export` |
+| [MESSAGES.md](MESSAGES.md) | `messages list/thread/send/edit/delete/permalink/mark/scheduled/search/get` |
+| [USERS.md](USERS.md) | `users list/info/me/groups/export`; direct messages by user |
+| [FILES.md](FILES.md) | `files list/info/get/upload/search` |
 | [REACTIONS.md](REACTIONS.md) | `reactions add/remove/list` |
 | [PINS.md](PINS.md) | `pins add/remove/list` |
 | [EMOJI.md](EMOJI.md) | `emoji list` |

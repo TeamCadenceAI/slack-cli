@@ -1,6 +1,8 @@
 //! Files CLI commands for Slack CLI
 //!
-//! Handles file operations: get, info, list.
+//! Handles file operations: get, info, list, upload, and search.
+
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 
@@ -52,6 +54,46 @@ pub enum FilesCommands {
         #[arg(long)]
         cursor: Option<String>,
     },
+
+    /// Upload a file using Slack's external-upload flow
+    Upload {
+        /// Path to a regular readable file
+        path: PathBuf,
+
+        /// Channel name or ID to share the file to
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// File title displayed in Slack
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Comment to post with the shared file
+        #[arg(long, requires = "channel")]
+        comment: Option<String>,
+
+        /// Thread timestamp to share the file into
+        #[arg(long, requires = "channel")]
+        thread_ts: Option<String>,
+
+        /// Override the uploaded filename
+        #[arg(long)]
+        filename: Option<String>,
+    },
+
+    /// Search files (requires a user or browser token)
+    Search {
+        /// Slack file-search query
+        query: String,
+
+        /// Number of results per page (1-100)
+        #[arg(long, default_value_t = 20, value_parser = parse_search_count)]
+        count: u32,
+
+        /// One-based page number
+        #[arg(long, default_value_t = 1, value_parser = parse_search_page)]
+        page: u32,
+    },
 }
 
 /// Run the files command
@@ -66,8 +108,7 @@ pub async fn run(
 
     let output_mode = OutputMode::from_flags(plain);
 
-    // Get the token
-    let token = get_token(workspace, token_override)?;
+    let token = crate::auth::resolve_token(workspace, token_override)?;
     let client = SlackClient::new(token)?;
 
     match &cmd.command {
@@ -99,57 +140,34 @@ pub async fn run(
             )
             .await?;
         }
+
+        FilesCommands::Upload {
+            path,
+            channel,
+            title,
+            comment,
+            thread_ts,
+            filename,
+        } => {
+            upload_file(
+                &client,
+                path,
+                channel.as_deref(),
+                title.as_deref(),
+                comment.as_deref(),
+                thread_ts.as_deref(),
+                filename.as_deref(),
+                output_mode,
+            )
+            .await?;
+        }
+
+        FilesCommands::Search { query, count, page } => {
+            search_files(&client, query, *count, *page, output_mode).await?;
+        }
     }
 
     Ok(())
-}
-
-/// Get the authentication token
-fn get_token(
-    workspace: Option<&str>,
-    token_override: Option<&str>,
-) -> crate::error::Result<crate::auth::TokenSet> {
-    use crate::auth::{get_token_store, TokenSet, TokenType};
-    use crate::error::SlackError;
-
-    if let Some(token_str) = token_override {
-        let token_type = TokenType::from_prefix(token_str).ok_or_else(|| {
-            SlackError::InvalidToken("Token must start with xoxp-, xoxb-, or xoxc-".into())
-        })?;
-
-        if token_type == TokenType::Browser {
-            return Err(SlackError::InvalidToken(
-                "Browser tokens require --xoxc and --xoxd flags in 'auth add'".into(),
-            ));
-        }
-
-        TokenSet::new_oauth(
-            token_str.to_string(),
-            "unknown".into(),
-            "unknown".into(),
-            "unknown".into(),
-            vec![],
-        )
-    } else {
-        let store = get_token_store();
-
-        if let Some(ws_name) = workspace {
-            let workspaces = store.get_workspace_info()?;
-            let ws = workspaces
-                .iter()
-                .find(|w| {
-                    crate::auth::workspace_matches(ws_name, &w.team_id, w.team_domain.as_deref())
-                })
-                .ok_or_else(|| SlackError::WorkspaceNotFound(ws_name.to_string()))?;
-            store
-                .get_token(&ws.team_id)?
-                .ok_or(SlackError::AuthRequired)
-        } else {
-            store
-                .get_default_or_first()?
-                .ok_or(SlackError::AuthRequired)
-        }
-    }
 }
 
 /// Download a file
@@ -286,6 +304,187 @@ async fn list_files(
     Ok(())
 }
 
+/// Upload a regular file through Slack's external-upload flow.
+#[allow(clippy::too_many_arguments)]
+async fn upload_file(
+    client: &crate::api::SlackClient,
+    path: &Path,
+    channel: Option<&str>,
+    title: Option<&str>,
+    comment: Option<&str>,
+    thread_ts: Option<&str>,
+    filename_override: Option<&str>,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    use std::io::Read;
+
+    use crate::error::SlackError;
+    use crate::output::write_json;
+
+    if (comment.is_some() || thread_ts.is_some()) && channel.is_none() {
+        return Err(SlackError::Usage(
+            "--comment and --thread-ts require --channel".to_string(),
+        ));
+    }
+    if path == Path::new("-") {
+        return Err(SlackError::Usage(
+            "file uploads do not accept stdin; provide a file path".to_string(),
+        ));
+    }
+
+    let filename = upload_filename(path, filename_override)?;
+    let mut file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(SlackError::Usage(format!(
+            "upload path is not a regular file: {}",
+            path.display()
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+
+    // Resolution intentionally happens before the upload URL is requested.
+    let channel_id = match channel {
+        Some(identifier) => Some(client.resolve_channel(identifier).await?),
+        None => None,
+    };
+
+    let response = client
+        .files_upload_external(
+            &filename,
+            bytes,
+            title,
+            channel_id.as_deref(),
+            comment,
+            thread_ts,
+        )
+        .await?;
+
+    if output_mode == crate::output::OutputMode::Plain {
+        for file in &response.files {
+            println!("{}", file.id);
+        }
+    } else {
+        write_json(&serde_json::json!({
+            "ok": true,
+            "files": response.files,
+        }))?;
+    }
+
+    Ok(())
+}
+
+fn upload_filename(path: &Path, filename_override: Option<&str>) -> crate::error::Result<String> {
+    use crate::error::SlackError;
+
+    let filename = match filename_override {
+        Some(filename) => filename,
+        None => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                SlackError::Usage(
+                    "upload path has no UTF-8 filename; supply --filename".to_string(),
+                )
+            })?,
+    };
+
+    if filename.trim().is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.chars().any(char::is_control)
+    {
+        return Err(SlackError::Usage(
+            "--filename must be a non-empty filename without path separators or control characters"
+                .to_string(),
+        ));
+    }
+
+    Ok(filename.to_string())
+}
+
+/// Search files and render either structured JSON or escaped TSV.
+async fn search_files(
+    client: &crate::api::SlackClient,
+    query: &str,
+    count: u32,
+    page: u32,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    use crate::api::file_ops::SearchFilesParams;
+    use crate::error::SlackError;
+    use crate::output::write_json;
+
+    if !client.supports_search() {
+        return Err(SlackError::SearchNotAvailable);
+    }
+
+    let response = client
+        .search_files(SearchFilesParams {
+            query: query.to_string(),
+            count,
+            page,
+        })
+        .await?;
+
+    if output_mode == crate::output::OutputMode::Plain {
+        for file in &response.files.matches {
+            println!(
+                "{}\t{}\t{}",
+                escape_tsv(&file.id),
+                escape_tsv(
+                    file.title
+                        .as_deref()
+                        .filter(|title| !title.is_empty())
+                        .or(file.name.as_deref())
+                        .unwrap_or(""),
+                ),
+                escape_tsv(file.permalink.as_deref().unwrap_or("")),
+            );
+        }
+    } else {
+        write_json(&serde_json::json!({
+            "total": response.files.total,
+            "pagination": response.files.pagination,
+            "files": response.files.matches,
+        }))?;
+    }
+
+    Ok(())
+}
+
+fn escape_tsv(value: &str) -> String {
+    value
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn parse_search_count(value: &str) -> std::result::Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|_| "count must be an integer from 1 to 100".to_string())?;
+    if (1..=100).contains(&count) {
+        Ok(count)
+    } else {
+        Err("count must be from 1 to 100".to_string())
+    }
+}
+
+fn parse_search_page(value: &str) -> std::result::Result<u32, String> {
+    let page = value
+        .parse::<u32>()
+        .map_err(|_| "page must be a positive integer".to_string())?;
+    if page > 0 {
+        Ok(page)
+    } else {
+        Err("page must be positive".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +617,136 @@ mod tests {
         } else {
             panic!("Expected Files command");
         }
+    }
+
+    #[test]
+    fn test_parse_files_upload() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "files",
+            "upload",
+            "report.bin",
+            "--channel",
+            "general",
+            "--title",
+            "Quarterly report",
+            "--comment",
+            "Please review",
+            "--thread-ts",
+            "123.456",
+            "--filename",
+            "report-final.bin",
+        ])
+        .unwrap();
+
+        match cli.command {
+            crate::cli::Commands::Files(FilesCmd {
+                command:
+                    FilesCommands::Upload {
+                        path,
+                        channel,
+                        title,
+                        comment,
+                        thread_ts,
+                        filename,
+                    },
+            }) => {
+                assert_eq!(path, PathBuf::from("report.bin"));
+                assert_eq!(channel.as_deref(), Some("general"));
+                assert_eq!(title.as_deref(), Some("Quarterly report"));
+                assert_eq!(comment.as_deref(), Some("Please review"));
+                assert_eq!(thread_ts.as_deref(), Some("123.456"));
+                assert_eq!(filename.as_deref(), Some("report-final.bin"));
+            }
+            _ => panic!("Expected Upload command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_files_upload_comment_requires_channel() {
+        assert!(Cli::try_parse_from([
+            "slack",
+            "files",
+            "upload",
+            "report.bin",
+            "--comment",
+            "hello",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "slack",
+            "files",
+            "upload",
+            "report.bin",
+            "--thread-ts",
+            "123.456",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn test_parse_files_search_defaults_and_options() {
+        let defaults = Cli::try_parse_from(["slack", "files", "search", "budget"]).unwrap();
+        match defaults.command {
+            crate::cli::Commands::Files(FilesCmd {
+                command: FilesCommands::Search { query, count, page },
+            }) => {
+                assert_eq!(query, "budget");
+                assert_eq!(count, 20);
+                assert_eq!(page, 1);
+            }
+            _ => panic!("Expected Search command"),
+        }
+
+        let custom = Cli::try_parse_from([
+            "slack", "files", "search", "budget", "--count", "50", "--page", "3",
+        ])
+        .unwrap();
+        match custom.command {
+            crate::cli::Commands::Files(FilesCmd {
+                command: FilesCommands::Search { count, page, .. },
+            }) => {
+                assert_eq!(count, 50);
+                assert_eq!(page, 3);
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_files_search_rejects_ranges() {
+        assert!(
+            Cli::try_parse_from(["slack", "files", "search", "budget", "--count", "0"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["slack", "files", "search", "budget", "--count", "101"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["slack", "files", "search", "budget", "--page", "0"]).is_err()
+        );
+    }
+
+    #[test]
+    fn test_upload_filename_rejects_empty_and_invalid_overrides() {
+        let path = PathBuf::from("report.txt");
+        assert!(upload_filename(&path, Some("")).is_err());
+        assert!(upload_filename(&path, Some("..")).is_err());
+        assert!(upload_filename(&path, Some("folder/file.txt")).is_err());
+        assert!(upload_filename(&path, Some("bad\nname")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_upload_filename_requires_utf8_basename_unless_overridden() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid = PathBuf::from(OsString::from_vec(vec![b'f', 0xff]));
+        assert!(upload_filename(&invalid, None).is_err());
+        assert_eq!(
+            upload_filename(&invalid, Some("fallback.bin")).unwrap(),
+            "fallback.bin"
+        );
     }
 
     #[test]

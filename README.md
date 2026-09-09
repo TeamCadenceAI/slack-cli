@@ -5,7 +5,8 @@ A comprehensive Rust CLI tool for Slack, designed for AI agents and automation.
 ## Features
 
 - **Multiple authentication methods**: OAuth, browser tokens (xoxc+xoxd), direct tokens (xoxp/xoxb)
-- **Full workspace access**: Channels, messages, threads, search, files, reactions, reminders, status
+- **Full workspace access**: Manage channels, messages, DMs, users, user groups, files, pins, bookmarks, custom emoji, reactions, reminders, and status
+- **Message and file workflows**: Edit, delete, schedule, and search messages; upload and search files
 - **Generic API escape hatch**: `slack api` calls any Slack Web API method with your stored auth
 - **Agent-first design**: JSON output by default, optimized for AI consumption
 - **Minimal footprint**: No config files, tokens stored in system keyring
@@ -437,6 +438,7 @@ slack users info alice@example.com
 
 # Send a direct message (opens or reuses the IM, then sends normally)
 slack messages send @username "Hello directly"
+slack messages send U123456789 "Hello by user ID"
 
 # List user groups and group members
 slack users groups list
@@ -461,15 +463,34 @@ slack files list
 # List files in a channel
 slack files list --channel "#general"
 
-# List files by type
-slack files list --types images,documents
+# Filter and paginate files
+slack files list --user U123456789 --limit 50 --cursor NEXT_CURSOR
 
 # Get file info
 slack files info F123456789
 
-# Download a file
-slack files download F123456789 --output ./downloads/
+# Download a file (optionally emit base64)
+slack files get F123456789 --output ./downloads/report.pdf
+slack files get F123456789 --base64
+
+# Upload a file (filename defaults to the path basename)
+slack files upload ./report.pdf --channel "#general" --title "Quarterly report"
+slack files upload ./data.bin --filename archive.bin
+
+# Share an upload in a thread with a comment
+slack files upload ./notes.txt --channel C123456789 \
+  --comment "Meeting notes" --thread-ts 1234567890.123456
+
+# Search files (user or browser token only)
+slack files search "quarterly report"
+slack files search "from:alice has:pdf" --count 50 --page 2
 ```
+
+Uploads use Slack's external-upload flow and require the `files:write` scope.
+`--filename` must be supplied when the path has no UTF-8 basename; otherwise
+its standalone value overrides the basename. `--comment` and `--thread-ts`
+require `--channel`. File search requires `search:read` and a user OAuth or
+stored browser token; Slack does not support file search with bot tokens.
 
 ### Reactions (`slack reactions` or `slack r`)
 
@@ -536,12 +557,12 @@ the bookmark ID.
 slack status get
 
 # Set status with emoji and text
-slack status set ":coffee:" "Taking a break"
+slack status set "Taking a break" --emoji coffee
 
 # Set status with expiration
-slack status set ":meeting:" "In a meeting" --expires 1h
-slack status set ":calendar:" "Out of office" --expires today
-slack status set ":palm_tree:" "On vacation" --expires tomorrow
+slack status set "In a meeting" --emoji meeting --expires 1h
+slack status set "Out of office" --emoji calendar --expires today
+slack status set "On vacation" --emoji palm_tree --expires tomorrow
 
 # Clear status
 slack status clear
@@ -558,8 +579,8 @@ slack status presence auto
 slack reminders list
 
 # Create a reminder
-slack reminders add "Review PRs" --time "in 2 hours"
-slack reminders add "Team meeting" --time "tomorrow at 10am"
+slack reminders add "Review PRs" --when "in 2 hours"
+slack reminders add "Team meeting" --when "tomorrow at 10am"
 
 # Complete a reminder
 slack reminders complete Rm123456789
@@ -625,8 +646,9 @@ Duplicate parameter names (across `-f`/`-F`) are rejected.
   to another host.
 - No automatic pagination — pass `cursor`/`limit` yourself and follow
   `response_metadata.next_cursor`.
-- Not supported: custom headers, file uploads, name→ID resolution, jq
-  filtering, or Edge API endpoints.
+- Not supported by `slack api`: custom headers, raw-body file uploads,
+  name→ID resolution, jq filtering, or Edge API endpoints. Use
+  `slack files upload` for Slack's supported external-upload flow.
 
 **Output** is the full JSON response from Slack on success. `--plain` is not
 supported for `slack api`. Slack `ok: false` responses, rate limits, and

@@ -9,27 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Message mutations and permalinks**: edit and delete messages, mark channels
-  read, retrieve strict permalinks, and best-effort enrich successful send/get
-  JSON while preserving plain output.
-- **Advanced and scheduled sending**: send Block Kit payloads and broadcast
-  thread replies, schedule messages up to 120 days ahead, and list or delete
-  queued messages.
-- **Message reading**: read exclusive date/timestamp-bounded channel history,
-  collect all history pages, resolve authors and mentions from one paginated
-  user-directory traversal, and select search result sort order.
-- **Channels**: list and resolve channel members, create and manage channel
-  lifecycle and membership, and show a capability-dependent Web API unread
-  overview with unavailable-count reporting.
-- **Identity and user groups**: send direct messages with `messages send @user`,
-  look up users by email, and list user groups or their members with optional
-  bulk user-name resolution.
-- **Pins**: add, remove, and list channel pins with `slack pins`, preserving
-  message, file, and other pin item payloads in JSON output.
+- **Direct messages by user**: send directly to `@username` or a user ID by
+  opening or reusing the user's IM conversation.
+- **User lookup by email**: resolve email addresses through
+  `users.lookupByEmail` with `slack users info`.
+- **User groups**: list enabled groups and their members, with optional bulk
+  user-name resolution.
+- **Message editing**: replace message text by `channel:timestamp` or Slack
+  permalink, with Markdown-to-mrkdwn conversion or verbatim text.
+- **Message deletion**: delete a message by `channel:timestamp` or Slack
+  permalink without an interactive prompt.
+- **Message permalinks**: retrieve strict permalinks and best-effort enrich
+  successful send/get JSON while preserving plain output.
+- **Broadcast thread replies**: make a thread reply visible in its channel with
+  `messages send --broadcast`.
+- **Message read markers**: mark a channel read through a timestamp, directly
+  or after an immediate send.
+- **Scheduled messages**: schedule messages up to 120 days ahead, then list or
+  delete queued messages.
+- **Block Kit messages**: send a nonempty Block Kit JSON array from a file or
+  stdin, with optional fallback text.
+- **Resolved message output**: resolve authors and mentions from one paginated
+  workspace user-directory traversal.
+- **Bounded message history**: read exclusive date/timestamp bounds and fetch
+  complete channel history with cursor pagination.
+- **Message search sorting**: order search results by score or timestamp in
+  ascending or descending order.
+- **Channel members**: list channel member IDs with optional bulk user-name
+  resolution.
+- **Channel lifecycle**: create, join, leave, archive, restore, invite to,
+  rename, and update the topic or purpose of channels.
+- **Unread overview**: show capability-dependent Web API unread counts and
+  report channels for which Slack omits count data.
+- **File uploads**: upload named files through Slack's supported external-upload
+  flow, optionally sharing them to a channel or thread.
+- **File search**: search workspace files with a user OAuth or browser token,
+  preserving Slack pagination metadata.
+- **Pins**: add, remove, and list channel pins while preserving message, file,
+  and other pin item payloads in JSON output.
 - **Custom emoji list**: list workspace custom emoji URLs and aliases with
-  `slack emoji list`, with sorted TSV output available through `--plain`.
-- **Channel bookmarks**: list, add, and remove channel link bookmarks with
-  `slack bookmarks`, including optional emoji and script-friendly TSV output.
+  sorted TSV output available through `--plain`.
+- **Channel bookmarks**: list, add, and remove channel link bookmarks with an
+  optional emoji and script-friendly TSV output.
 
 ### Changed
 
