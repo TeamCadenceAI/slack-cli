@@ -58,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app OAuth flow by default, document browser/manual routes, callback setup,
   credential errors, token storage, and explicit scope replacement.
 
+### Fixed
+
+- **Edge API HTTP status handling**: `EdgeClient` decoded the response body
+  before checking the HTTP status, so a gateway/proxy error carrying a
+  plausible `ok: true` payload could be accepted as success. Non-2xx responses
+  are now reported as `api_error` with `HTTP <status>` and the (truncated) body
+  as `detail`, matching the Web API client.
+- **Exit-code documentation**: README/AGENTS.md documented exit codes 2–6 for
+  auth/usage/API/rate-limit/network failures that the CLI never emitted. The
+  CLI exits `1` for any runtime failure and `2` for usage errors; the JSON
+  `code` field is the machine-readable discriminator. Docs now say so.
+
 ## [0.2.1] - 2026-09-08
 
 ### Fixed

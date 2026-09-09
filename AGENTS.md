@@ -73,12 +73,13 @@ CI runs on every push/PR to main. These are the exact checks:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Authentication required |
-| 3 | Invalid arguments |
-| 4 | API error |
-| 5 | Rate limited |
-| 6 | Network error |
+| 1 | Any runtime failure (auth required, API `ok: false`, rate limited, network, not found, …) |
+| 2 | Usage error (invalid arguments/flags, including clap parse errors) |
+
+Exit codes are defined in `SlackError::exit_code` (`src/error/types.rs`). The
+JSON error object's `code` field (`SlackError::code`) is the stable,
+machine-readable discriminator — do not add new exit codes without updating
+this table, README.md, and the CLI tests that assert them.
 
 ## Release
 

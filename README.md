@@ -705,12 +705,18 @@ slack channels list --plain
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Authentication required |
-| 3 | Invalid arguments |
-| 4 | API error |
-| 5 | Rate limited |
-| 6 | Network error |
+| 1 | Any runtime failure: authentication required, API error (`ok: false`), rate limited, network error, not found, etc. |
+| 2 | Usage error: invalid arguments or flags (including errors reported by the argument parser) |
+
+The exit code only distinguishes usage errors from runtime failures. To find
+out *what* failed, read the JSON error object on stdout — its `code` field is
+stable (`auth_required`, `api_error`, `rate_limited`, `network_error`,
+`channel_not_found`, `user_not_found`, `search_not_available`, `usage_error`,
+…) and `detail` carries the Slack error string when there is one:
+
+```json
+{"error": true, "code": "auth_required", "message": "Authentication required. Run: slack auth add", "detail": null}
+```
 
 ## Development
 

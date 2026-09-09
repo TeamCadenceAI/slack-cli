@@ -211,7 +211,7 @@ async fn non_json_response_maps_to_network_error() {
 }
 
 #[tokio::test]
-async fn non_success_http_status_with_non_edge_body_maps_to_network_error() {
+async fn non_success_http_status_is_an_api_error_with_status_and_body_detail() {
     let mut server = Server::new_async().await;
     let request = authenticated_mock(
         &mut server,
@@ -228,6 +228,68 @@ async fn non_success_http_status_with_non_edge_body_maps_to_network_error() {
         .search_channels("rust", 10)
         .await
         .unwrap_err();
-    assert!(matches!(error, SlackError::Network(_)), "got {error:?}");
+    match error {
+        SlackError::Api { error, detail } => {
+            assert_eq!(error, "HTTP 503 Service Unavailable");
+            assert_eq!(
+                detail.as_deref(),
+                Some(r#"{"message":"service unavailable"}"#)
+            );
+        }
+        other => panic!("expected API error, got {other:?}"),
+    }
+    request.assert_async().await;
+}
+
+#[tokio::test]
+async fn non_success_http_status_rejects_an_otherwise_valid_ok_true_body() {
+    // A gateway/proxy or stale cache can return a 2xx-looking Edge payload
+    // under a failing status; the status must win.
+    let mut server = Server::new_async().await;
+    let request = authenticated_mock(
+        &mut server,
+        "channels.search",
+        json!({"query":"rust","count":10}),
+    )
+    .with_status(502)
+    .with_header("content-type", "application/json")
+    .with_body(r#"{"ok":true,"results":[]}"#)
+    .create_async()
+    .await;
+
+    let error = edge_client(&server)
+        .search_channels("rust", 10)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SlackError::Api { ref error, .. } if error.starts_with("HTTP 502")),
+        "got {error:?}"
+    );
+    request.assert_async().await;
+}
+
+#[tokio::test]
+async fn non_success_http_status_with_empty_body_has_no_detail() {
+    let mut server = Server::new_async().await;
+    let request = authenticated_mock(
+        &mut server,
+        "channels.search",
+        json!({"query":"rust","count":10}),
+    )
+    .with_status(500)
+    .create_async()
+    .await;
+
+    let error = edge_client(&server)
+        .search_channels("rust", 10)
+        .await
+        .unwrap_err();
+    match error {
+        SlackError::Api { error, detail } => {
+            assert_eq!(error, "HTTP 500 Internal Server Error");
+            assert_eq!(detail, None);
+        }
+        other => panic!("expected API error, got {other:?}"),
+    }
     request.assert_async().await;
 }
