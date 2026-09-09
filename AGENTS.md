@@ -43,7 +43,7 @@ CI runs on every push/PR to main. These are the exact checks:
 3. `cargo fmt --all -- --check`
 4. `cargo clippy --all-targets --all-features -- -D warnings`
 5. `cargo doc --no-deps --document-private-items` (with `RUSTDOCFLAGS=-D warnings`)
-6. `cargo llvm-cov --all-features --workspace --fail-under 80`
+6. `cargo llvm-cov --all-features --workspace --ignore-filename-regex 'src/bin/test_keyring\.rs' --fail-under-lines 80` (`src/bin/test_keyring.rs`, the diagnostic binary, is excluded from coverage)
 
 ## Guardrails (do not)
 
