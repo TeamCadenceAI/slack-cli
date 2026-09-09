@@ -88,7 +88,7 @@ pub enum MessagesCommands {
 
     /// Send a message
     Send {
-        /// Channel name or ID
+        /// Channel name, channel ID, @user, or user ID
         channel: String,
 
         /// Message text (optional if using --stdin or --blocks)
