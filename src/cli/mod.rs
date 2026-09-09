@@ -2,6 +2,7 @@
 //!
 //! Contains command-line interface definitions and handlers.
 
+pub mod api;
 pub mod auth;
 pub mod channels;
 pub mod completions;
@@ -13,6 +14,7 @@ pub mod root;
 pub mod status;
 pub mod users;
 
+pub use api::ApiCmd;
 pub use auth::AuthCmd;
 pub use channels::ChannelsCmd;
 pub use completions::{generate_completions, CompletionsArgs};

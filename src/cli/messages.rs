@@ -159,7 +159,7 @@ pub async fn run(
     let output_mode = OutputMode::from_flags(plain);
 
     // Get the token
-    let token = get_token(workspace, token_override)?;
+    let token = crate::auth::resolve_token(workspace, token_override)?;
     let client = SlackClient::new(token)?;
 
     match &cmd.command {
@@ -256,53 +256,6 @@ pub async fn run(
     }
 
     Ok(())
-}
-
-/// Get the authentication token
-fn get_token(
-    workspace: Option<&str>,
-    token_override: Option<&str>,
-) -> Result<crate::auth::TokenSet> {
-    use crate::auth::{get_token_store, TokenSet, TokenType};
-
-    if let Some(token_str) = token_override {
-        let token_type = TokenType::from_prefix(token_str).ok_or_else(|| {
-            SlackError::InvalidToken("Token must start with xoxp-, xoxb-, or xoxc-".into())
-        })?;
-
-        if token_type == TokenType::Browser {
-            return Err(SlackError::InvalidToken(
-                "Browser tokens require --xoxc and --xoxd flags in 'auth add'".into(),
-            ));
-        }
-
-        TokenSet::new_oauth(
-            token_str.to_string(),
-            "unknown".into(),
-            "unknown".into(),
-            "unknown".into(),
-            vec![],
-        )
-    } else {
-        let store = get_token_store();
-
-        if let Some(ws_name) = workspace {
-            let workspaces = store.get_workspace_info()?;
-            let ws = workspaces
-                .iter()
-                .find(|w| {
-                    crate::auth::workspace_matches(ws_name, &w.team_id, w.team_domain.as_deref())
-                })
-                .ok_or_else(|| SlackError::WorkspaceNotFound(ws_name.to_string()))?;
-            store
-                .get_token(&ws.team_id)?
-                .ok_or(SlackError::AuthRequired)
-        } else {
-            store
-                .get_default_or_first()?
-                .ok_or(SlackError::AuthRequired)
-        }
-    }
 }
 
 /// List messages in a channel

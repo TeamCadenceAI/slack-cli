@@ -5,6 +5,7 @@
 pub mod browser;
 pub mod extract;
 pub mod oauth;
+mod resolve;
 mod storage;
 pub mod store;
 mod tokens;
@@ -15,6 +16,7 @@ pub use extract::{
     ExtractedWorkspace,
 };
 pub use oauth::{OAuthConfig, OAuthFlow, DEFAULT_SCOPES};
+pub use resolve::resolve_token;
 pub use storage::{KeyringStore, WorkspaceInfo};
 pub use store::{
     get_token_store, FileTokenStore, KeyringTokenStore, TokenStore, TOKEN_STORE_PATH_ENV,
