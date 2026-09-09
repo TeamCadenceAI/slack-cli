@@ -7,6 +7,7 @@
 //! - Response types and API method parameters
 //! - Name resolution helpers
 
+pub mod bookmark_ops;
 mod client;
 pub mod edge;
 pub mod identity_ops;

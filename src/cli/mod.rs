@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod bookmarks;
 pub mod channels;
 pub mod completions;
 pub mod emoji;
@@ -19,6 +20,7 @@ pub mod users;
 
 pub use api::ApiCmd;
 pub use auth::AuthCmd;
+pub use bookmarks::BookmarksCmd;
 pub use channels::ChannelsCmd;
 pub use completions::{generate_completions, CompletionsArgs};
 pub use emoji::EmojiCmd;

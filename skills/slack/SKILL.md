@@ -216,6 +216,16 @@ slack --plain emoji list
 This lists custom workspace emoji only and requires `emoji:read`. See
 [EMOJI.md](EMOJI.md).
 
+### Manage channel bookmarks
+```bash
+slack bookmarks list "#general"
+slack bookmarks add "#general" "Runbook" https://example.com/runbook --emoji :books:
+slack bookmarks remove "#general" Bk123456789
+```
+
+Listing requires `bookmarks:read`; adding and removing require
+`bookmarks:write`. See [BOOKMARKS.md](BOOKMARKS.md).
+
 ### Set status
 ```bash
 slack status set "In a meeting" --emoji meeting --expires 1h
@@ -234,5 +244,6 @@ slack status clear
 | [REACTIONS.md](REACTIONS.md) | `reactions add/remove/list` |
 | [PINS.md](PINS.md) | `pins add/remove/list` |
 | [EMOJI.md](EMOJI.md) | `emoji list` |
+| [BOOKMARKS.md](BOOKMARKS.md) | `bookmarks list/add/remove` |
 | [STATUS.md](STATUS.md) | `status get/set/clear/presence` |
 | [REMINDERS.md](REMINDERS.md) | `reminders list/add/complete/delete` |

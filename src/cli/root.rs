@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 use super::api::ApiCmd;
 use super::auth::AuthCmd;
+use super::bookmarks::BookmarksCmd;
 use super::channels::ChannelsCmd;
 use super::completions::CompletionsArgs;
 use super::emoji::EmojiCmd;
@@ -82,6 +83,9 @@ pub enum Commands {
 
     /// Custom emoji operations
     Emoji(EmojiCmd),
+
+    /// Channel bookmark operations
+    Bookmarks(BookmarksCmd),
 
     /// User status/presence
     #[command(alias = "s")]

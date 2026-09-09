@@ -323,6 +323,25 @@ slack --plain emoji list
 including unchanged image URLs and `alias:<name>` values. It does not include
 Slack's built-in Unicode emoji.
 
+### Bookmarks (`slack bookmarks`)
+
+```bash
+# List channel bookmarks
+slack bookmarks list "#general"
+
+# Add a link bookmark, optionally with an emoji
+slack bookmarks add "#general" "Team docs" https://example.com/docs
+slack bookmarks add C123456789 "Runbook" https://example.com/runbook --emoji :books:
+
+# Remove a bookmark
+slack bookmarks remove "#general" Bk123456789
+```
+
+Listing requires `bookmarks:read`; adding and removing require
+`bookmarks:write`. JSON output retains optional bookmark metadata. With
+`--plain`, lists use `id<TAB>title<TAB>link<TAB>emoji`, while mutations print
+the bookmark ID.
+
 ### Status (`slack status` or `slack s`)
 
 ```bash

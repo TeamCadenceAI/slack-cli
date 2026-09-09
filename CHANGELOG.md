@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message, file, and other pin item payloads in JSON output.
 - **Custom emoji list**: list workspace custom emoji URLs and aliases with
   `slack emoji list`, with sorted TSV output available through `--plain`.
+- **Channel bookmarks**: list, add, and remove channel link bookmarks with
+  `slack bookmarks`, including optional emoji and script-friendly TSV output.
 
 ## [0.2.1] - 2026-09-08
 
