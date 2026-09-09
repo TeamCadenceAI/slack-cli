@@ -33,12 +33,12 @@
 - Verify linting: `cargo clippy --all-targets --all-features -- -D warnings`
 - Run targeted tests while iterating: `cargo test <test_name>`
 - Before finishing, run the full suite: `cargo test`
-- MSRV is **1.75** — do not use features requiring a newer Rust edition or version
+- MSRV is **1.78** (`rust-version` in Cargo.toml); CI builds on stable only
 
 ## CI checks (all must pass)
 
 CI runs on every push/PR to main. These are the exact checks:
-1. `cargo build --verbose` (Linux, macOS, Windows × stable + 1.75)
+1. `cargo build --verbose` (Linux, macOS, Windows × stable)
 2. `cargo test --verbose` (with `SLACK_INTEGRATION_TESTS=1`)
 3. `cargo fmt --all -- --check`
 4. `cargo clippy --all-targets --all-features -- -D warnings`
