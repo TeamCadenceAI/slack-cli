@@ -297,6 +297,32 @@ slack reactions remove C123456789 1234567890.123456 thumbsup
 slack reactions list C123456789 1234567890.123456
 ```
 
+### Pins (`slack pins`)
+
+```bash
+# Pin or unpin a message
+slack pins add "#general" 1234567890.123456
+slack pins remove C123456789 1234567890.123456
+
+# List all pinned items in a channel
+slack pins list "#general"
+```
+
+Adding and removing pins requires `pins:write`; listing requires `pins:read`.
+Pin list JSON preserves message, file, and other item records returned by Slack.
+
+### Emoji (`slack emoji`)
+
+```bash
+# List workspace custom emoji
+slack emoji list
+slack --plain emoji list
+```
+
+`emoji list` requires `emoji:read` and returns custom workspace emoji only,
+including unchanged image URLs and `alias:<name>` values. It does not include
+Slack's built-in Unicode emoji.
+
 ### Status (`slack status` or `slack s`)
 
 ```bash

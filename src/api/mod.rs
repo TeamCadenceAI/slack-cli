@@ -10,6 +10,7 @@
 mod client;
 pub mod edge;
 pub mod identity_ops;
+pub mod pin_emoji_ops;
 mod rate_limiter;
 mod resolve;
 pub mod types;

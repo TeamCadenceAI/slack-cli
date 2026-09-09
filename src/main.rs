@@ -6,8 +6,8 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use slack_cli::cli::{
-    api, auth, channels, files, generate_completions, messages, reactions, reminders, status,
-    users, Cli, Commands,
+    api, auth, channels, emoji, files, generate_completions, messages, pins, reactions, reminders,
+    status, users, Cli, Commands,
 };
 use slack_cli::error::SlackError;
 use slack_cli::output::OutputMode;
@@ -110,6 +110,24 @@ async fn run_command(cli: &Cli) -> Result<(), SlackError> {
         }
         Commands::Reactions(cmd) => {
             reactions::run(
+                cmd,
+                cli.plain,
+                cli.workspace.as_deref(),
+                cli.token.as_deref(),
+            )
+            .await
+        }
+        Commands::Pins(cmd) => {
+            pins::run(
+                cmd,
+                cli.plain,
+                cli.workspace.as_deref(),
+                cli.token.as_deref(),
+            )
+            .await
+        }
+        Commands::Emoji(cmd) => {
+            emoji::run(
                 cmd,
                 cli.plain,
                 cli.workspace.as_deref(),

@@ -198,6 +198,24 @@ U-ID to select a user. Email lookup requires `users:read.email`, groups require
 requires `im:write` (or the applicable conversation-write scope for the token
 type). Missing scopes are reported as Slack API errors. See [USERS.md](USERS.md).
 
+### Manage pins
+```bash
+slack pins add "#general" 1234567890.123456
+slack pins list "#general"
+```
+
+Adding/removing requires `pins:write`; listing requires `pins:read`. See
+[PINS.md](PINS.md).
+
+### List custom emoji
+```bash
+slack emoji list
+slack --plain emoji list
+```
+
+This lists custom workspace emoji only and requires `emoji:read`. See
+[EMOJI.md](EMOJI.md).
+
 ### Set status
 ```bash
 slack status set "In a meeting" --emoji meeting --expires 1h
@@ -214,5 +232,7 @@ slack status clear
 | [USERS.md](USERS.md) | `users list/info/me/groups/export` |
 | [FILES.md](FILES.md) | `files list/info/get` |
 | [REACTIONS.md](REACTIONS.md) | `reactions add/remove/list` |
+| [PINS.md](PINS.md) | `pins add/remove/list` |
+| [EMOJI.md](EMOJI.md) | `emoji list` |
 | [STATUS.md](STATUS.md) | `status get/set/clear/presence` |
 | [REMINDERS.md](REMINDERS.md) | `reminders list/add/complete/delete` |

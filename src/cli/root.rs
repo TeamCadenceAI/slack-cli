@@ -8,8 +8,10 @@ use super::api::ApiCmd;
 use super::auth::AuthCmd;
 use super::channels::ChannelsCmd;
 use super::completions::CompletionsArgs;
+use super::emoji::EmojiCmd;
 use super::files::FilesCmd;
 use super::messages::MessagesCmd;
+use super::pins::PinsCmd;
 use super::reactions::ReactionsCmd;
 use super::reminders::RemindersCmd;
 use super::status::StatusCmd;
@@ -74,6 +76,12 @@ pub enum Commands {
     /// Reaction operations
     #[command(alias = "r")]
     Reactions(ReactionsCmd),
+
+    /// Pin operations
+    Pins(PinsCmd),
+
+    /// Custom emoji operations
+    Emoji(EmojiCmd),
 
     /// User status/presence
     #[command(alias = "s")]
