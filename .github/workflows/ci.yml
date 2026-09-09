@@ -133,6 +133,6 @@ jobs:
             ${{ runner.os }}-cargo-coverage-
 
       - name: Run coverage
-        run: cargo llvm-cov --all-features --workspace
+        run: cargo llvm-cov --all-features --workspace --ignore-filename-regex 'src/bin/test_keyring\.rs' --fail-under-lines 80
         env:
           SLACK_INTEGRATION_TESTS: "1"
