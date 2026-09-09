@@ -176,6 +176,63 @@ slack channels dms
 slack channels export --output channels.csv
 ```
 
+#### Channel members
+
+```bash
+# Member IDs, preserving Slack's order
+slack channels members "#general"
+
+# Resolve IDs to usernames (display name, then ID, are fallbacks)
+slack --plain channels members "#general" --resolve
+```
+
+Member listing requires access to the conversation and its applicable read
+scope. `--resolve` additionally requires `users:read` and loads the workspace
+user directory once. IDs Slack omits from that directory remain visible with
+the ID as their name.
+
+#### Channel lifecycle
+
+```bash
+slack channels create project-room
+slack channels create leadership --private
+slack channels join "#project-room"
+slack channels invite "#project-room" @alice U123456789
+slack channels set-topic "#project-room" "Quarterly launch"
+slack channels set-purpose "#project-room" "Coordinate the launch"
+slack channels rename "#project-room" launch-room
+slack channels leave "#launch-room"
+slack channels archive "#launch-room"
+slack channels unarchive "#launch-room"
+```
+
+Names and IDs are accepted for channel operands, including archived channel
+names. Invitees are resolved to user IDs and deduplicated before one invite;
+if any user cannot be resolved, nobody is invited. These operations require
+the applicable Slack channel-management, join, and invite scopes and, where
+Slack requires it, membership or administrator permission. Archiving is
+destructive to normal channel use until an authorized user unarchives it;
+the CLI does not ask for confirmation.
+
+Pass an empty string to `set-topic` or `set-purpose` to clear it. JSON
+mutations return `{"ok":true,"channel":...}`; `--plain` prints the channel ID.
+
+#### Unread overview
+
+```bash
+slack channels unread
+slack --plain channels unread
+```
+
+This command uses the Web API only. It checks joined public/private channels,
+DMs, and group DMs and includes positive counts when `conversations.info`
+exposes `unread_count_display` or `unread_count`. Slack omits these fields for
+some workspaces and token types, so this is a capability-dependent overview,
+not a guaranteed complete unread view. JSON lists omitted-count conversation
+IDs in `unavailable_channels`; if no eligible conversation exposes any count,
+the command fails with `unread_unavailable`. Applicable conversation read
+scopes are required.
+
 ### Messages (`slack messages` or `slack m`)
 
 ```bash

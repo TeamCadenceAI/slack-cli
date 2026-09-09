@@ -167,12 +167,25 @@ slack messages search "deploy failed" --in-channel "#ops"
 slack messages search "from:@alice budget"
 ```
 
-### List channels
+### List and manage channels
 ```bash
 slack channels list
 slack channels list --types public_channel,private_channel,im,mpim
 slack channels list --sort-popularity --exclude-archived
+slack channels members "#general" --resolve
+slack channels create project-room --private
+slack channels invite "#project-room" @alice U123456789
+slack channels set-topic "#project-room" "Launch coordination"
+slack channels archive "#old-project"
+slack channels unread
 ```
+
+Channel and invite operands resolve names to IDs; invitations fail without
+mutating if any user cannot be resolved. Management requires the applicable
+Slack scopes and permissions, and archive has no confirmation. Unread counts
+are Web-API-only and capability dependent: inspect `unavailable_channels` and
+do not treat the overview as complete when Slack omits count fields. See
+[CHANNELS.md](CHANNELS.md).
 
 ### Look up users
 ```bash

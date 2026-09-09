@@ -1,8 +1,11 @@
 //! Channels CLI commands for Slack CLI
 //!
-//! Handles channel operations: list, info, dms, export.
+//! Handles channel operations: listing, membership, lifecycle, and unread counts.
+
+use std::collections::{HashMap, HashSet};
 
 use clap::{Args, Subcommand};
+use serde::Serialize;
 
 /// Channel operations commands
 #[derive(Args, Debug)]
@@ -50,6 +53,90 @@ pub enum ChannelsCommands {
         #[arg(long)]
         include_mpim: bool,
     },
+
+    /// List members of a channel
+    Members {
+        /// Channel name or ID
+        channel: String,
+
+        /// Resolve member IDs to user names
+        #[arg(long)]
+        resolve: bool,
+    },
+
+    /// Create a channel
+    Create {
+        /// Channel name
+        name: String,
+
+        /// Create a private channel
+        #[arg(long)]
+        private: bool,
+    },
+
+    /// Join a channel
+    Join {
+        /// Channel name or ID
+        channel: String,
+    },
+
+    /// Leave a channel
+    Leave {
+        /// Channel name or ID
+        channel: String,
+    },
+
+    /// Archive a channel
+    Archive {
+        /// Channel name or ID
+        channel: String,
+    },
+
+    /// Restore an archived channel
+    Unarchive {
+        /// Channel name or ID
+        channel: String,
+    },
+
+    /// Invite one or more users to a channel
+    Invite {
+        /// Channel name or ID
+        channel: String,
+
+        /// User names or IDs
+        #[arg(required = true, num_args = 1..)]
+        users: Vec<String>,
+    },
+
+    /// Set or clear a channel topic
+    SetTopic {
+        /// Channel name or ID
+        channel: String,
+
+        /// New topic; pass an empty string to clear it
+        text: String,
+    },
+
+    /// Set or clear a channel purpose
+    SetPurpose {
+        /// Channel name or ID
+        channel: String,
+
+        /// New purpose; pass an empty string to clear it
+        text: String,
+    },
+
+    /// Rename a channel
+    Rename {
+        /// Channel name or ID
+        channel: String,
+
+        /// New channel name
+        new_name: String,
+    },
+
+    /// Show channels with unread messages when Slack exposes counts
+    Unread,
 
     /// Export all channels to CSV
     Export {
@@ -105,6 +192,90 @@ pub async fn run(
 
         ChannelsCommands::Dms { include_mpim } => {
             list_dms(&client, *include_mpim, output_mode).await?;
+        }
+
+        ChannelsCommands::Members { channel, resolve } => {
+            list_members(&client, channel, *resolve, output_mode).await?;
+        }
+
+        ChannelsCommands::Create { name, private } => {
+            create_channel(&client, name, *private, output_mode).await?;
+        }
+
+        ChannelsCommands::Join { channel } => {
+            channel_mutation(&client, ChannelMutation::Join, channel, None, output_mode).await?;
+        }
+
+        ChannelsCommands::Leave { channel } => {
+            channel_mutation(&client, ChannelMutation::Leave, channel, None, output_mode).await?;
+        }
+
+        ChannelsCommands::Archive { channel } => {
+            channel_mutation(
+                &client,
+                ChannelMutation::Archive,
+                channel,
+                None,
+                output_mode,
+            )
+            .await?;
+        }
+
+        ChannelsCommands::Unarchive { channel } => {
+            channel_mutation(
+                &client,
+                ChannelMutation::Unarchive,
+                channel,
+                None,
+                output_mode,
+            )
+            .await?;
+        }
+
+        ChannelsCommands::Invite { channel, users } => {
+            invite_users(&client, channel, users, output_mode).await?;
+        }
+
+        ChannelsCommands::SetTopic { channel, text } => {
+            channel_mutation(
+                &client,
+                ChannelMutation::SetTopic,
+                channel,
+                Some(text),
+                output_mode,
+            )
+            .await?;
+        }
+
+        ChannelsCommands::SetPurpose { channel, text } => {
+            channel_mutation(
+                &client,
+                ChannelMutation::SetPurpose,
+                channel,
+                Some(text),
+                output_mode,
+            )
+            .await?;
+        }
+
+        ChannelsCommands::Rename { channel, new_name } => {
+            if new_name.is_empty() {
+                return Err(crate::error::SlackError::Usage(
+                    "channel name cannot be empty".to_string(),
+                ));
+            }
+            channel_mutation(
+                &client,
+                ChannelMutation::Rename,
+                channel,
+                Some(new_name),
+                output_mode,
+            )
+            .await?;
+        }
+
+        ChannelsCommands::Unread => {
+            unread_channels(&client, output_mode).await?;
         }
 
         ChannelsCommands::Export { output, types } => {
@@ -300,6 +471,314 @@ async fn list_dms(
         write_channels_plain(&plain_channels)?;
     } else {
         write_json(&channels)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ResolvedMember {
+    id: String,
+    user_name: String,
+}
+
+#[derive(Serialize)]
+struct UnreadChannel {
+    id: String,
+    name: Option<String>,
+    is_im: bool,
+    is_mpim: bool,
+    user: Option<String>,
+    unread_count: u64,
+}
+
+#[derive(Clone, Copy)]
+enum ChannelMutation {
+    Join,
+    Leave,
+    Archive,
+    Unarchive,
+    SetTopic,
+    SetPurpose,
+    Rename,
+}
+
+fn escape_tsv(value: &str) -> String {
+    value
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn member_user_name(user: &crate::models::User) -> String {
+    user.name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            user.profile
+                .as_ref()
+                .and_then(|profile| profile.display_name.as_deref())
+                .filter(|name| !name.is_empty())
+        })
+        .unwrap_or(&user.id)
+        .to_string()
+}
+
+async fn list_members(
+    client: &crate::api::SlackClient,
+    channel: &str,
+    resolve: bool,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    let channel_id = client.resolve_channel(channel).await?;
+    let members = client.conversations_members_all(&channel_id).await?;
+
+    if resolve {
+        let users = client.users_list_all().await?;
+        let names: HashMap<String, String> = users
+            .iter()
+            .map(|user| (user.id.clone(), member_user_name(user)))
+            .collect();
+        let resolved: Vec<ResolvedMember> = members
+            .iter()
+            .map(|id| ResolvedMember {
+                id: id.clone(),
+                user_name: names.get(id).cloned().unwrap_or_else(|| id.clone()),
+            })
+            .collect();
+
+        if output_mode == crate::output::OutputMode::Plain {
+            for member in &resolved {
+                println!("{}\t{}", member.id, escape_tsv(&member.user_name));
+            }
+        } else {
+            crate::output::write_json(&serde_json::json!({
+                "channel": channel_id,
+                "members": resolved,
+            }))?;
+        }
+    } else if output_mode == crate::output::OutputMode::Plain {
+        for member in &members {
+            println!("{}", member);
+        }
+    } else {
+        crate::output::write_json(&serde_json::json!({
+            "channel": channel_id,
+            "members": members,
+        }))?;
+    }
+
+    Ok(())
+}
+
+async fn create_channel(
+    client: &crate::api::SlackClient,
+    name: &str,
+    private: bool,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    if name.is_empty() {
+        return Err(crate::error::SlackError::Usage(
+            "channel name cannot be empty".to_string(),
+        ));
+    }
+    let response = client.conversations_create(name, private).await?;
+    write_channel_mutation(response.channel, output_mode)
+}
+
+fn write_channel_mutation(
+    channel: crate::models::Channel,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    if output_mode == crate::output::OutputMode::Plain {
+        println!("{}", channel.id);
+    } else {
+        crate::output::write_json(&serde_json::json!({
+            "ok": true,
+            "channel": channel,
+        }))?;
+    }
+    Ok(())
+}
+
+fn write_id_mutation(
+    channel_id: &str,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    if output_mode == crate::output::OutputMode::Plain {
+        println!("{}", channel_id);
+    } else {
+        crate::output::write_json(&serde_json::json!({
+            "ok": true,
+            "channel": channel_id,
+        }))?;
+    }
+    Ok(())
+}
+
+async fn channel_mutation(
+    client: &crate::api::SlackClient,
+    mutation: ChannelMutation,
+    channel: &str,
+    value: Option<&str>,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    let channel_id = client.resolve_channel(channel).await?;
+    match mutation {
+        ChannelMutation::Join => {
+            let response = client.conversations_join(&channel_id).await?;
+            write_channel_mutation(response.channel, output_mode)
+        }
+        ChannelMutation::Leave => {
+            client.conversations_leave(&channel_id).await?;
+            write_id_mutation(&channel_id, output_mode)
+        }
+        ChannelMutation::Archive => {
+            client.conversations_archive(&channel_id).await?;
+            write_id_mutation(&channel_id, output_mode)
+        }
+        ChannelMutation::Unarchive => {
+            client.conversations_unarchive(&channel_id).await?;
+            write_id_mutation(&channel_id, output_mode)
+        }
+        ChannelMutation::SetTopic => {
+            let response = client
+                .conversations_set_topic(&channel_id, value.unwrap_or(""))
+                .await?;
+            write_channel_mutation(response.channel, output_mode)
+        }
+        ChannelMutation::SetPurpose => {
+            let response = client
+                .conversations_set_purpose(&channel_id, value.unwrap_or(""))
+                .await?;
+            write_channel_mutation(response.channel, output_mode)
+        }
+        ChannelMutation::Rename => {
+            let response = client
+                .conversations_rename(&channel_id, value.unwrap_or(""))
+                .await?;
+            write_channel_mutation(response.channel, output_mode)
+        }
+    }
+}
+
+async fn invite_users(
+    client: &crate::api::SlackClient,
+    channel: &str,
+    users: &[String],
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    let channel_id = client.resolve_channel(channel).await?;
+    let mut user_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for user in users {
+        let user_id = client.resolve_user(user).await?;
+        if seen.insert(user_id.clone()) {
+            user_ids.push(user_id);
+        }
+    }
+
+    let response = client
+        .conversations_invite(&channel_id, &user_ids.join(","))
+        .await?;
+    write_channel_mutation(response.channel, output_mode)
+}
+
+async fn unread_channels(
+    client: &crate::api::SlackClient,
+    output_mode: crate::output::OutputMode,
+) -> crate::error::Result<()> {
+    let channels = client
+        .conversations_list_all(Some("public_channel,private_channel,mpim,im"), true)
+        .await?;
+    let eligible: Vec<_> = channels
+        .into_iter()
+        .filter(|channel| {
+            !channel.is_archived && (channel.is_im || channel.is_mpim || channel.is_member)
+        })
+        .collect();
+
+    if eligible.is_empty() {
+        if output_mode == crate::output::OutputMode::Plain {
+            return Ok(());
+        }
+        crate::output::write_json(&serde_json::json!({
+            "channels": [],
+            "unavailable_channels": [],
+        }))?;
+        return Ok(());
+    }
+
+    let mut unread = Vec::new();
+    let mut unavailable = Vec::new();
+    let mut known_counts = 0usize;
+    for channel in eligible {
+        let response = client.conversations_info_unread(&channel.id).await?;
+        let count = response
+            .channel
+            .unread_count_display
+            .or(response.channel.unread_count);
+        match count {
+            Some(count) => {
+                known_counts += 1;
+                if count > 0 {
+                    unread.push(UnreadChannel {
+                        id: channel.id,
+                        name: channel.name,
+                        is_im: channel.is_im,
+                        is_mpim: channel.is_mpim,
+                        user: channel.user,
+                        unread_count: count,
+                    });
+                }
+            }
+            None => unavailable.push(channel.id),
+        }
+    }
+
+    if known_counts == 0 {
+        return Err(crate::error::SlackError::Api {
+            error: "unread_unavailable".to_string(),
+            detail: Some(
+                "this workspace/token does not expose unread counts through the Web API"
+                    .to_string(),
+            ),
+        });
+    }
+
+    unread.sort_by(|left, right| {
+        right
+            .unread_count
+            .cmp(&left.unread_count)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    if output_mode == crate::output::OutputMode::Plain {
+        for channel in &unread {
+            let label = channel
+                .name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .or(channel.user.as_deref().filter(|user| !user.is_empty()))
+                .unwrap_or(&channel.id);
+            println!(
+                "{}\t{}\t{}",
+                channel.id,
+                escape_tsv(label),
+                channel.unread_count
+            );
+        }
+        if !unavailable.is_empty() {
+            eprintln!(
+                "warning: unread counts unavailable for {} channel(s)",
+                unavailable.len()
+            );
+        }
+    } else {
+        crate::output::write_json(&serde_json::json!({
+            "channels": unread,
+            "unavailable_channels": unavailable,
+        }))?;
     }
 
     Ok(())
@@ -587,6 +1066,82 @@ mod tests {
         } else {
             panic!("Expected Channels command");
         }
+    }
+
+    #[test]
+    fn test_parse_channels_members_and_create() {
+        let unresolved = Cli::try_parse_from(["slack", "channels", "members", "general"]).unwrap();
+        let crate::cli::Commands::Channels(unresolved) = unresolved.command else {
+            panic!("Expected Channels command");
+        };
+        assert!(matches!(
+            unresolved.command,
+            ChannelsCommands::Members { resolve: false, .. }
+        ));
+
+        let cli =
+            Cli::try_parse_from(["slack", "channels", "members", "general", "--resolve"]).unwrap();
+        let crate::cli::Commands::Channels(cmd) = cli.command else {
+            panic!("Expected Channels command");
+        };
+        assert!(matches!(
+            cmd.command,
+            ChannelsCommands::Members { channel, resolve }
+                if channel == "general" && resolve
+        ));
+
+        let public = Cli::try_parse_from(["slack", "channels", "create", "public-room"]).unwrap();
+        let crate::cli::Commands::Channels(public) = public.command else {
+            panic!("Expected Channels command");
+        };
+        assert!(matches!(
+            public.command,
+            ChannelsCommands::Create { private: false, .. }
+        ));
+
+        let cli = Cli::try_parse_from(["slack", "channels", "create", "private-room", "--private"])
+            .unwrap();
+        let crate::cli::Commands::Channels(cmd) = cli.command else {
+            panic!("Expected Channels command");
+        };
+        assert!(matches!(
+            cmd.command,
+            ChannelsCommands::Create { name, private }
+                if name == "private-room" && private
+        ));
+    }
+
+    #[test]
+    fn test_parse_channels_lifecycle_variants() {
+        for subcommand in ["join", "leave", "archive", "unarchive"] {
+            Cli::try_parse_from(["slack", "channels", subcommand, "C123456789"]).unwrap();
+        }
+        Cli::try_parse_from(["slack", "channels", "set-topic", "general", "topic"]).unwrap();
+        Cli::try_parse_from(["slack", "channels", "set-purpose", "general", "purpose"]).unwrap();
+        Cli::try_parse_from(["slack", "channels", "rename", "general", "new-name"]).unwrap();
+        Cli::try_parse_from(["slack", "channels", "unread"]).unwrap();
+    }
+
+    #[test]
+    fn test_parse_channels_invite_requires_users() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "channels",
+            "invite",
+            "general",
+            "alice",
+            "U123456789",
+        ])
+        .unwrap();
+        let crate::cli::Commands::Channels(cmd) = cli.command else {
+            panic!("Expected Channels command");
+        };
+        assert!(matches!(
+            cmd.command,
+            ChannelsCommands::Invite { channel, users }
+                if channel == "general" && users == ["alice", "U123456789"]
+        ));
+        assert!(Cli::try_parse_from(["slack", "channels", "invite", "general"]).is_err());
     }
 
     #[test]

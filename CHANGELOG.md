@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Channels**: list and resolve channel members, create and manage channel
+  lifecycle and membership, and show a capability-dependent Web API unread
+  overview with unavailable-count reporting.
 - **Identity and user groups**: send direct messages with `messages send @user`,
   look up users by email, and list user groups or their members with optional
   bulk user-name resolution.
