@@ -24,9 +24,9 @@ use crate::error::{Result, SlackError};
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 use pbkdf2::pbkdf2_hmac;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 use sha1::Sha1;
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -76,33 +76,15 @@ const AES_KEY_LEN: usize = 16;
 /// non-macOS platform, where Keychain access is not yet implemented.
 #[cfg(target_os = "macos")]
 pub fn safe_storage_keys(safe_storage_service: &str) -> Result<Vec<Vec<u8>>> {
-    let mut passwords: Vec<Vec<u8>> = Vec::new();
-    let mut last_error = String::new();
-
     // Try the account-less lookup first (covers non-Slack browsers with a
     // single item), then each well-known Slack account name.
     let mut attempts: Vec<Option<&str>> = vec![None];
     attempts.extend(KNOWN_SAFE_STORAGE_ACCOUNTS.iter().map(|a| Some(*a)));
 
-    for account in attempts {
-        match read_keychain_password(safe_storage_service, account) {
-            Ok(pw) if !pw.is_empty() => {
-                if !passwords.contains(&pw) {
-                    passwords.push(pw);
-                }
-            }
-            Ok(_) => {}
-            Err(e) => last_error = e,
-        }
-    }
-
-    if passwords.is_empty() {
-        return Err(SlackError::Other(format!(
-            "failed to read any Keychain password for service '{safe_storage_service}': {last_error}"
-        )));
-    }
-
-    Ok(passwords.iter().map(|pw| derive_key(pw)).collect())
+    let results = attempts
+        .into_iter()
+        .map(|account| read_keychain_password(safe_storage_service, account));
+    derive_safe_storage_keys(safe_storage_service, results)
 }
 
 /// Read one Keychain generic password, optionally scoped to `account`.
@@ -153,8 +135,44 @@ pub fn safe_storage_keys(_safe_storage_service: &str) -> Result<Vec<Vec<u8>>> {
     ))
 }
 
+/// De-duplicate successful Keychain reads and derive one key per password.
+///
+/// Keeping this separate from the platform command makes candidate handling
+/// deterministic and testable without accessing a user's Keychain.
+#[cfg(any(target_os = "macos", test))]
+fn derive_safe_storage_keys<I>(service: &str, results: I) -> Result<Vec<Vec<u8>>>
+where
+    I: IntoIterator<Item = std::result::Result<Vec<u8>, String>>,
+{
+    let mut passwords: Vec<Vec<u8>> = Vec::new();
+    let mut last_error = String::new();
+
+    for result in results {
+        match result {
+            Ok(password) if !password.is_empty() => {
+                if !passwords.contains(&password) {
+                    passwords.push(password);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => last_error = error,
+        }
+    }
+
+    if passwords.is_empty() {
+        return Err(SlackError::Other(format!(
+            "failed to read any Keychain password for service '{service}': {last_error}"
+        )));
+    }
+
+    Ok(passwords
+        .iter()
+        .map(|password| derive_key(password))
+        .collect())
+}
+
 /// Stretch a raw Keychain password into the 16-byte AES cookie key.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn derive_key(password: &[u8]) -> Vec<u8> {
     let mut key = vec![0u8; AES_KEY_LEN];
     pbkdf2_hmac::<Sha1>(password, b"saltysalt", 1003, &mut key);
@@ -263,6 +281,42 @@ mod tests {
     }
 
     #[test]
+    fn derives_known_chromium_key_vector() {
+        assert_eq!(
+            derive_key(b"peanuts"),
+            [
+                0xd9, 0xa0, 0x9d, 0x49, 0x9b, 0x4e, 0x1b, 0x74, 0x61, 0xf2, 0x8e, 0x67, 0x97, 0x2c,
+                0x6d, 0xbd,
+            ]
+        );
+    }
+
+    #[test]
+    fn derives_distinct_keys_from_successful_password_results() {
+        let results = vec![
+            Err("first lookup failed".to_string()),
+            Ok(Vec::new()),
+            Ok(b"peanuts".to_vec()),
+            Ok(b"peanuts".to_vec()),
+            Ok(b"different".to_vec()),
+        ];
+        let keys = derive_safe_storage_keys("Fixture Safe Storage", results).unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], derive_key(b"peanuts"));
+        assert_eq!(keys[1], derive_key(b"different"));
+    }
+
+    #[test]
+    fn key_derivation_reports_last_lookup_error_when_no_password_exists() {
+        let results = vec![Ok(Vec::new()), Err("access denied".to_string())];
+        let err = derive_safe_storage_keys("Fixture Safe Storage", results).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Fixture Safe Storage"));
+        assert!(message.contains("access denied"));
+    }
+
+    #[test]
     fn decrypts_plain_xoxd_value_with_pkcs7_padding() {
         let key = [0x11u8; AES_KEY_LEN];
         let token = b"xoxd-abc123-not-a-real-token";
@@ -320,11 +374,29 @@ mod tests {
     }
 
     #[test]
-    fn non_block_aligned_ciphertext_errors() {
+    fn malformed_ciphertexts_error() {
         let key = [0x66u8; AES_KEY_LEN];
+
+        assert!(decrypt_cookie_value(V10_PREFIX, &key).is_err());
+
         // v10 + 5 bytes that are not a multiple of the AES block size.
-        let mut blob = V10_PREFIX.to_vec();
-        blob.extend_from_slice(b"12345");
-        assert!(decrypt_cookie_value(&blob, &key).is_err());
+        let mut unaligned = V10_PREFIX.to_vec();
+        unaligned.extend_from_slice(b"12345");
+        assert!(decrypt_cookie_value(&unaligned, &key).is_err());
+
+        // One aligned block with invalid PKCS#7 padding reaches the AES error.
+        let mut bad_padding = V10_PREFIX.to_vec();
+        bad_padding.extend_from_slice(&[0u8; AES_KEY_LEN]);
+        let err = decrypt_cookie_value(&bad_padding, &key).unwrap_err();
+        assert!(err.to_string().contains("AES-CBC"));
+    }
+
+    #[test]
+    fn rejects_long_plaintext_without_a_valid_token_after_domain_hash() {
+        assert!(finalize_cookie_plaintext(vec![b'a'; DOMAIN_HASH_LEN + 8]).is_err());
+
+        let mut invalid_utf8_tail = vec![b'a'; DOMAIN_HASH_LEN];
+        invalid_utf8_tail.extend_from_slice(&[0xff; 8]);
+        assert!(finalize_cookie_plaintext(invalid_utf8_tail).is_err());
     }
 }

@@ -740,6 +740,15 @@ mod tests {
         let truncated = [0x80]; // continuation bit set, no follow-up byte
         let mut pos = 0;
         assert_eq!(read_varint(&truncated, &mut pos), None);
+
+        let overflow = [0x80; 10];
+        let mut pos = 0;
+        assert_eq!(read_varint(&overflow, &mut pos), None);
+
+        let mut pos = 0;
+        assert_eq!(read_block_handle(&[7, 9], &mut pos), Some((7, 9)));
+        let mut pos = 0;
+        assert_eq!(read_block_handle(&[7], &mut pos), None);
     }
 
     #[test]
@@ -750,11 +759,174 @@ mod tests {
     }
 
     #[test]
-    fn non_sstable_ldb_returns_none() {
+    fn fixture_log_and_sstable_extract_the_same_team() {
+        const LOG: &[u8] = include_bytes!("../../../tests/fixtures/extract/local_config.log");
+        const SSTABLE: &[u8] =
+            include_bytes!("../../../tests/fixtures/extract/minimal_sstable.ldb");
+        const PAYLOAD: &[u8] = b"localConfig_v2{\"teams\":{\"T1234567\":{\"name\":\"Fixture\",\"domain\":\"fixture\",\"token\":\"xoxc-fixture-1234567890\"}}}";
+
+        let mut decoded = sstable_data_bytes(SSTABLE).expect("valid fixture sstable");
+        assert_eq!(decoded.pop(), Some(b'\n'));
+        assert_eq!(decoded, PAYLOAD);
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("000001.log"), LOG).unwrap();
+        fs::write(dir.path().join("000002.LDB"), SSTABLE).unwrap();
+        fs::write(dir.path().join("CURRENT"), b"ignored xoxc-not-read-1234").unwrap();
+        fs::create_dir(dir.path().join("000003.log")).unwrap();
+
+        let tokens = extract_tokens_from_leveldb(dir.path()).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].team_id.as_deref(), Some("T1234567"));
+        assert_eq!(tokens[0].domain.as_deref(), Some("fixture"));
+        assert_eq!(tokens[0].name.as_deref(), Some("Fixture"));
+    }
+
+    #[test]
+    fn reads_uncompressed_snappy_and_unknown_block_types() {
+        let plain = b"block bytes";
+        let mut uncompressed = plain.to_vec();
+        uncompressed.push(0);
+        assert_eq!(read_block(&uncompressed, 0, plain.len()).unwrap(), plain);
+
+        let compressed = snap::raw::Encoder::new().compress_vec(plain).unwrap();
+        let mut snappy_block = compressed.clone();
+        snappy_block.push(1);
+        assert_eq!(
+            read_block(&snappy_block, 0, compressed.len()).unwrap(),
+            plain
+        );
+
+        let mut unknown = plain.to_vec();
+        unknown.push(7);
+        assert_eq!(read_block(&unknown, 0, plain.len()).unwrap(), plain);
+
+        assert!(read_block(&[1, 2, 3], 0, 3).is_none());
+        assert!(read_block(&[1, 2, 3], usize::MAX, 2).is_none());
+        assert!(read_block(&[0xff, 1], 0, 1).is_none());
+    }
+
+    #[test]
+    fn whole_file_snappy_fallback_is_scanned() {
+        let payload = b"noise xoxc-whole-snappy-1234567890 trailer";
+        let compressed = snap::raw::Encoder::new().compress_vec(payload).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("000010.ldb"), compressed).unwrap();
+
+        let tokens = extract_tokens_from_leveldb(dir.path()).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].xoxc, "xoxc-whole-snappy-1234567890");
+    }
+
+    #[test]
+    fn parses_index_handles_and_rejects_malformed_entries() {
+        // shared=0, key delta="k", value=BlockHandle(offset=7,size=9),
+        // followed by one restart offset and num_restarts=1.
+        let valid = [0, 1, 2, b'k', 7, 9, 0, 0, 0, 0, 1, 0, 0, 0];
+        assert_eq!(parse_index_handles(&valid), vec![(7, 9)]);
+        assert!(parse_index_handles(&[]).is_empty());
+        assert!(parse_index_handles(&u32::MAX.to_le_bytes()).is_empty());
+
+        let trailer = [0, 0, 0, 0, 1, 0, 0, 0];
+        for entries in [
+            vec![0x80],
+            vec![0, 0x80],
+            vec![0, 1, 0x80],
+            vec![0, 9, 0],
+            vec![0, 0, 9],
+            vec![0, 0, 1, 0x80],
+        ] {
+            let mut block = entries;
+            block.extend_from_slice(&trailer);
+            assert!(parse_index_handles(&block).is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_sstable_footers_and_handles_fail_safely() {
         assert!(sstable_data_bytes(b"too short").is_none());
-        let mut buf = vec![0u8; 64];
-        // Wrong magic tail.
-        buf.extend_from_slice(&[0u8; 8]);
-        assert!(sstable_data_bytes(&buf).is_none());
+        let mut wrong_magic = vec![0u8; 64];
+        wrong_magic.extend_from_slice(&[0u8; 8]);
+        assert!(sstable_data_bytes(&wrong_magic).is_none());
+
+        let mut truncated_handle = vec![0u8; 48];
+        truncated_handle[..10].fill(0x80);
+        truncated_handle[40..].copy_from_slice(&SSTABLE_MAGIC);
+        assert!(sstable_data_bytes(&truncated_handle).is_none());
+
+        // Valid footer handles whose index offset points outside the file.
+        let mut bad_index = vec![0u8; 48];
+        bad_index[0..4].copy_from_slice(&[0, 0, 127, 1]);
+        bad_index[40..].copy_from_slice(&SSTABLE_MAGIC);
+        assert!(sstable_data_bytes(&bad_index).is_none());
+    }
+
+    #[test]
+    fn strict_and_fallback_parsers_cover_partial_records() {
+        assert!(parse_local_config("localConfig_v2 no object").is_empty());
+        assert!(parse_local_config("localConfig_v2{broken}").is_empty());
+        assert!(parse_local_config(
+            "localConfig_v2{\"teams\":{\"T1234567\":{\"token\":\"xoxp-not-client\"},\"T7654321\":{}}}}"
+        )
+        .is_empty());
+
+        let bare = "localConfig_v2{\"workspace\":{\"id\":\"TEXPLICIT\",\"token\":\"xoxc-bare-map-123456\"}}";
+        let tokens = parse_local_config(bare);
+        assert_eq!(tokens[0].team_id.as_deref(), Some("TEXPLICIT"));
+        assert_eq!(tokens[0].domain, None);
+
+        assert!(scan_teams("xoxc-tiny").is_empty());
+        assert!(extract_json_object("prefix {unterminated", 0).is_none());
+    }
+
+    #[test]
+    fn token_merge_and_loose_metadata_fill_missing_fields() {
+        let mut tokens = vec![TeamToken {
+            team_id: None,
+            domain: None,
+            name: None,
+            xoxc: "xoxc-merge-fixture-1234".into(),
+        }];
+        merge_token(
+            &mut tokens,
+            TeamToken {
+                team_id: Some("T1234567".into()),
+                domain: Some("fixture".into()),
+                name: Some("Fixture".into()),
+                xoxc: "xoxc-merge-fixture-1234".into(),
+            },
+        );
+        assert_eq!(tokens[0].team_id.as_deref(), Some("T1234567"));
+        assert_eq!(tokens[0].domain.as_deref(), Some("fixture"));
+        assert_eq!(tokens[0].name.as_deref(), Some("Fixture"));
+
+        assert_eq!(
+            loose_string_after_key(r#"\"name\":\"line\nslash\/tab\tend\""#, "name"),
+            Some("line\nslash/tab\tend".into())
+        );
+        assert_eq!(
+            unescape(concat!(r#"a\/b\\c\"d\ne\tf\q"#, "\\")),
+            "a/b\\c\"d\ne\tf\\q\\"
+        );
+        assert_eq!(loose_string_after_key("{}", "name"), None);
+        assert_eq!(loose_string_after_key("name no colon", "name"), None);
+        assert_eq!(loose_string_after_key("name: no quote", "name"), None);
+        assert_eq!(loose_string_after_key("name:\"unterminated", "name"), None);
+    }
+
+    #[test]
+    fn nested_object_and_team_id_scans_are_bounded() {
+        let text = r#"{"outer":{"closed":{}} ,"T1234567":{"token":"xoxc-nested-object-1234"}}"#;
+        let pos = text.find("xoxc-").unwrap();
+        let (start, end) = enclosing_object(text.as_bytes(), pos);
+        assert_eq!(&text[start..=end], r#"{"token":"xoxc-nested-object-1234"}"#);
+        assert_eq!(
+            find_team_id_before(text, start).as_deref(),
+            Some("T1234567")
+        );
+
+        assert_eq!(find_team_id_before("not-quoted-T1234567", 19), None);
+        assert_eq!(find_team_id_before(r#"{"T1":{}"#, 8), None);
+        assert_eq!(find_team_id_before(r#"{"T12345678901234567":{}"#, 22), None);
     }
 }
