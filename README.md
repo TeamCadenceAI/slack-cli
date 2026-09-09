@@ -243,13 +243,27 @@ slack users list --active-only
 # Get current user info
 slack users me
 
-# Get user info by ID or name
+# Get user info by ID, name, or email
 slack users info U123456789
 slack users info @username
+slack users info alice@example.com
+
+# Send a direct message (opens or reuses the IM, then sends normally)
+slack messages send @username "Hello directly"
+
+# List user groups and group members
+slack users groups list
+slack users groups members @engineering
+slack users groups members S123456789 --resolve
 
 # Export users to CSV
 slack users export --output users.csv
 ```
+
+Email lookup requires `users:read.email`, and user-group commands require
+`usergroups:read`. Direct-message opening uses `conversations.open` and normally
+requires `im:write` (or the applicable conversation-write scope for the Slack
+token type). Slack API missing-scope errors are returned unchanged.
 
 ### Files (`slack files` or `slack f`)
 

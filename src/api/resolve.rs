@@ -30,15 +30,27 @@ fn is_user_id(s: &str) -> bool {
     matches!(s.chars().next(), Some('U'))
 }
 
+/// Return a normalized email address when the identifier has nonempty local
+/// and domain components.
+fn email_identifier(identifier: &str) -> Option<&str> {
+    let trimmed = identifier.trim();
+    let (local, domain) = trimmed.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || domain.contains('@') {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 impl SlackClient {
     /// Resolve a channel identifier to a channel ID
     ///
     /// If the identifier already looks like a channel ID (starts with C/D/G
     /// and is 9+ characters), it is returned as-is.
     ///
-    /// Otherwise, the identifier is treated as a channel name. The leading #
-    /// is stripped if present, and the API is searched to find the matching
-    /// channel ID.
+    /// A leading `@` or a valid user ID opens a direct-message conversation
+    /// and returns its channel ID. Otherwise, the identifier is treated as a
+    /// channel name. The leading `#` is stripped if present before searching.
     ///
     /// # Errors
     ///
@@ -47,6 +59,28 @@ impl SlackClient {
         // If it looks like a channel ID, return as-is
         if is_channel_id(identifier) {
             return Ok(identifier.to_string());
+        }
+
+        // A leading @ explicitly selects a user. A valid bare user ID is also
+        // unambiguous; ordinary bare names remain channel names.
+        let dm_target = if let Some(target) = identifier.strip_prefix('@') {
+            let target = target.trim();
+            if target.is_empty() {
+                return Err(SlackError::Usage(
+                    "direct-message target after @ cannot be empty".to_string(),
+                ));
+            }
+            Some(target)
+        } else if is_user_id(identifier) {
+            Some(identifier)
+        } else {
+            None
+        };
+
+        if let Some(target) = dm_target {
+            let user_id = self.resolve_user(target).await?;
+            let response = self.conversations_open(&user_id).await?;
+            return Ok(response.channel.id);
         }
 
         // Strip leading # if present
@@ -104,9 +138,10 @@ impl SlackClient {
     /// If the identifier already looks like a user ID (starts with U
     /// and is 9+ characters), it is returned as-is.
     ///
-    /// Otherwise, the identifier is treated as a username. The leading @
-    /// is stripped if present, and the API is searched to find the matching
-    /// user ID by matching on `name` or `profile.display_name`.
+    /// Email addresses are resolved with `users.lookupByEmail`. Otherwise, the
+    /// identifier is treated as a username. The leading `@` is stripped if
+    /// present, and `users.list` is searched for `name` or
+    /// `profile.display_name`.
     ///
     /// # Errors
     ///
@@ -115,6 +150,10 @@ impl SlackClient {
         // If it looks like a user ID, return as-is
         if is_user_id(identifier) {
             return Ok(identifier.to_string());
+        }
+
+        if let Some(email) = email_identifier(identifier) {
+            return Ok(self.users_lookup_by_email(email).await?.id);
         }
 
         // Strip leading @ if present
@@ -168,9 +207,14 @@ impl SlackClient {
 
     /// Resolve a user identifier and return the full User object
     ///
-    /// Similar to `resolve_user`, but returns the full User object
-    /// including all metadata from users.info.
+    /// Similar to `resolve_user`, but returns the full user object. Email
+    /// lookups return the `users.lookupByEmail` user directly; other
+    /// identifiers are fetched with `users.info` after resolution.
     pub async fn resolve_user_info(&self, identifier: &str) -> Result<User> {
+        if let Some(email) = email_identifier(identifier) {
+            return self.users_lookup_by_email(email).await;
+        }
+
         let user_id = self.resolve_user(identifier).await?;
         self.users_info(&user_id).await
     }
@@ -235,5 +279,17 @@ mod tests {
         assert!(!is_user_id("T123456789")); // Team ID
         assert!(!is_user_id("johndoe")); // Name
         assert!(!is_user_id("@johndoe")); // Name with @
+    }
+
+    #[test]
+    fn test_email_identifier() {
+        assert_eq!(
+            email_identifier(" alice+ops@example.com "),
+            Some("alice+ops@example.com")
+        );
+        assert_eq!(email_identifier("@example.com"), None);
+        assert_eq!(email_identifier("alice@"), None);
+        assert_eq!(email_identifier("alice"), None);
+        assert_eq!(email_identifier("a@b@example.com"), None);
     }
 }

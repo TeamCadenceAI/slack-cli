@@ -1,8 +1,10 @@
 //! Users CLI commands for Slack CLI
 //!
-//! Handles user operations: list, info, me, export.
+//! Handles user operations: list, info, me, groups, export.
 
 use clap::{Args, Subcommand};
+
+use super::usergroups::UsergroupsCmd;
 
 /// User operations commands
 #[derive(Args, Debug)]
@@ -31,12 +33,15 @@ pub enum UsersCommands {
 
     /// Show user info
     Info {
-        /// Username or user ID
+        /// Username, email address, or user ID
         user: String,
     },
 
     /// Show current authenticated user
     Me,
+
+    /// Manage workspace user groups
+    Groups(UsergroupsCmd),
 
     /// Export all users to CSV
     Export {
@@ -88,6 +93,10 @@ pub async fn run(
 
         UsersCommands::Me => {
             me(&client, output_mode).await?;
+        }
+
+        UsersCommands::Groups(groups) => {
+            super::usergroups::run(groups, &client, output_mode).await?;
         }
 
         UsersCommands::Export {
@@ -453,6 +462,20 @@ mod tests {
         if let crate::cli::Commands::Users(users_cmd) = cli.command {
             if let UsersCommands::Info { user } = users_cmd.command {
                 assert_eq!(user, "@johndoe");
+            } else {
+                panic!("Expected Info command");
+            }
+        } else {
+            panic!("Expected Users command");
+        }
+    }
+
+    #[test]
+    fn test_parse_users_info_by_email() {
+        let cli = Cli::try_parse_from(["slack", "users", "info", "alice+cli@example.com"]).unwrap();
+        if let crate::cli::Commands::Users(users_cmd) = cli.command {
+            if let UsersCommands::Info { user } = users_cmd.command {
+                assert_eq!(user, "alice+cli@example.com");
             } else {
                 panic!("Expected Info command");
             }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Identity and user groups**: send direct messages with `messages send @user`,
+  look up users by email, and list user groups or their members with optional
+  bulk user-name resolution.
+
 ## [0.2.1] - 2026-09-08
 
 ### Fixed

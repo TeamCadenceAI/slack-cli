@@ -179,7 +179,24 @@ slack channels list --sort-popularity --exclude-archived
 slack users me          # current authenticated user
 slack users list        # all workspace users
 slack users info @alice
+slack users info alice@example.com
 ```
+
+### Identity resolution and user groups
+```bash
+# A leading @ opens or reuses an IM before sending
+slack messages send @alice "Can you review this?"
+
+slack users groups list
+slack users groups members @engineering
+slack users groups members S123456789 --resolve
+```
+
+Bare names in message channel position remain channel names; use `@name` or a
+U-ID to select a user. Email lookup requires `users:read.email`, groups require
+`usergroups:read`, and opening an IM through `conversations.open` generally
+requires `im:write` (or the applicable conversation-write scope for the token
+type). Missing scopes are reported as Slack API errors. See [USERS.md](USERS.md).
 
 ### Set status
 ```bash
@@ -194,7 +211,7 @@ slack status clear
 | [AUTH.md](AUTH.md) | `auth add/discover/list/remove/status/switch/browser-help` |
 | [CHANNELS.md](CHANNELS.md) | `channels list/info/dms/export` |
 | [MESSAGES.md](MESSAGES.md) | `messages list/send/search/thread/get` |
-| [USERS.md](USERS.md) | `users list/info/me/export` |
+| [USERS.md](USERS.md) | `users list/info/me/groups/export` |
 | [FILES.md](FILES.md) | `files list/info/get` |
 | [REACTIONS.md](REACTIONS.md) | `reactions add/remove/list` |
 | [STATUS.md](STATUS.md) | `status get/set/clear/presence` |

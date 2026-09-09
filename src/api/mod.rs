@@ -9,6 +9,7 @@
 
 mod client;
 pub mod edge;
+pub mod identity_ops;
 mod rate_limiter;
 mod resolve;
 pub mod types;

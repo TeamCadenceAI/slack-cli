@@ -12,6 +12,7 @@ pub mod reactions;
 pub mod reminders;
 pub mod root;
 pub mod status;
+pub mod usergroups;
 pub mod users;
 
 pub use api::ApiCmd;
