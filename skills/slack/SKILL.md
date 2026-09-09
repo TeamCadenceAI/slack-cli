@@ -148,6 +148,24 @@ Use `--format plain` to send text verbatim (no conversion, mrkdwn parsing off).
 slack messages send "#general" "Deploy **failed** on [prod](https://ci/123) — see logs"
 ```
 
+**Advanced sending and mutations:**
+
+```bash
+slack messages send "#general" "Fallback" --blocks blocks.json
+slack messages send "#general" "Reply" --thread-ts 1234567890.123456 --broadcast
+slack messages send "#general" "Tomorrow" --schedule "tomorrow at 9am"
+slack messages edit "#general:1234567890.123456" "Corrected text"
+slack messages permalink "#general:1234567890.123456"
+slack messages scheduled list
+```
+
+Natural schedule expressions use local time and must be future times within
+120 days. `--schedule` conflicts with `--mark-read` and `--broadcast`.
+`--blocks -` reads the JSON array from stdin and cannot be combined with
+`--stdin`. Immediate JSON send/get permalink enrichment is best-effort and may
+produce `permalink: null`; plain output stays stable and skips enrichment. See
+[MESSAGES.md](MESSAGES.md).
+
 ### Read messages
 ```bash
 # Last 50 messages in a channel

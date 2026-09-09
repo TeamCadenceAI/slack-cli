@@ -311,6 +311,62 @@ Inline code `` `…` ``, fenced code blocks ```` ``` ````, and existing mrkdwn
 spans (`<@U…>` mentions, `<url|text>` links) are passed through untouched. Use
 `--format plain` to send text verbatim with mrkdwn parsing disabled.
 
+Immediate send JSON adds a top-level `"permalink"`, and `messages get` fills
+the message object's existing `"permalink"` field, for example:
+
+```json
+{"ok":true,"channel":"C123456789","ts":"1234567890.123456","message":{"ts":"1234567890.123456"},"permalink":"https://workspace.slack.com/archives/C123456789/p1234567890123456"}
+{"ts":"1234567890.123456","text":"hello","permalink":"https://workspace.slack.com/archives/C123456789/p1234567890123456"}
+```
+
+Permalink lookup is best-effort for these two commands: a successful send/read
+remains successful with `permalink: null` and a warning on stderr if enrichment
+fails. Their existing `--plain` output is unchanged and makes no permalink
+request.
+
+#### Message operations
+
+```bash
+slack messages edit "#general:1234567890.123456" "Updated **text**"
+slack messages edit "https://workspace.slack.com/archives/C123456789/p1234567890123456" "literal *text*" --format plain
+slack messages delete "#general:1234567890.123456"
+slack messages permalink "#general:1234567890.123456"
+slack messages mark "#general" 1234567890.123456
+```
+
+Identifiers are parsed locally as `channel:timestamp` or Slack permalinks;
+permalink URLs are never fetched. Explicit `messages permalink` errors are
+strictly propagated. Mutation JSON reports `ok`, channel, and message IDs;
+`--plain` prints only the timestamp (or URL for `permalink`). Delete does not
+prompt for confirmation, and Slack remains authoritative for ownership and
+permissions.
+
+#### Advanced and scheduled sending
+
+```bash
+# Broadcast a thread reply (requires --thread-ts)
+slack messages send "#general" "Visible reply" --thread-ts 1234567890.123456 --broadcast
+
+# Block Kit from a file, with optional fallback text
+slack messages send "#general" "Fallback text" --blocks blocks.json
+cat blocks.json | slack messages send "#general" --blocks -
+
+# Natural times use the machine's local timezone
+slack messages send "#general" "Daily summary" --schedule "tomorrow at 9am"
+slack messages scheduled list
+slack messages scheduled delete "#general" Q123456789
+```
+
+`--blocks` must contain a nonempty JSON array; block strings are not Markdown
+converted. Block-only sends are allowed. `--blocks -` owns stdin and conflicts
+with `--stdin`. Scheduling accepts natural expressions, Unix timestamps,
+RFC3339, and existing reminder date forms, must be in the future and no more
+than 120 days away, and supports threads, formats, and blocks. `--schedule`
+conflicts with `--mark-read` and `--broadcast`. Scheduled sends do not post,
+mark read, or fetch a permalink; JSON reports `permalink: null`, while plain
+send output remains one scheduled message ID. Scheduled list plain output is
+`id<TAB>channel_id<TAB>post_at<TAB>text`.
+
 ### Users (`slack users` or `slack u`)
 
 ```bash

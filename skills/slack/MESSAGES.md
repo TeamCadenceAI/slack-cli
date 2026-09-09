@@ -160,3 +160,47 @@ when the message has no user, with the ID as fallback for an unknown user).
 Without the flag, JSON is unchanged. Plain output always has four TSV columns
 (timestamp, author, channel, text); its author column changes from ID to name
 only when `--resolve-users` is explicitly requested.
+
+## Advanced sending
+
+```bash
+# Broadcast requires a thread parent
+slack messages send "#general" "Reply" --thread-ts 1234567890.123456 --broadcast
+
+# A nonempty Block Kit JSON array, with or without fallback text
+slack messages send "#general" "Fallback" --blocks blocks.json
+cat blocks.json | slack messages send "#general" --blocks -
+
+# Schedule using local natural time, Unix time, RFC3339, or a date form
+slack messages send "#general" "Report" --schedule "tomorrow 9am"
+```
+
+Markdown conversion applies only to fallback text, never strings inside
+blocks. `--blocks -` owns stdin and conflicts with `--stdin`. Scheduling allows
+`--thread-ts`, `--format`, and `--blocks`, but conflicts with `--mark-read` and
+`--broadcast`; it must be future and at most 120 days away. Natural expressions
+use the machine's local timezone. Scheduled sends never call the immediate
+post, mark-read, or permalink endpoints.
+
+## Mutate messages and manage scheduled messages
+
+```bash
+slack messages edit "#general:1234567890.123456" "Updated **text**"
+slack messages delete "https://workspace.slack.com/archives/C123456789/p1234567890123456"
+slack messages permalink "#general:1234567890.123456"
+slack messages mark "#general" 1234567890.123456
+slack messages scheduled list
+slack messages scheduled delete "#general" Q123456789
+```
+
+Edit, delete, and permalink accept `channel:timestamp` or a locally parsed
+Slack permalink; URLs are never fetched. Explicit permalink errors fail the
+command. Slack enforces message ownership, scheduling limits, and permissions,
+and delete does not prompt.
+
+Immediate send JSON has a top-level `permalink`; get JSON populates the
+message's `permalink`. If best-effort enrichment fails, they warn on stderr and
+emit `null` without failing the successful operation. Plain send/get output is
+unchanged and does not request enrichment. Scheduled send JSON always has
+`permalink: null`; plain prints only its scheduled ID. Scheduled list plain
+output is `id<TAB>channel_id<TAB>post_at<TAB>text`.

@@ -126,10 +126,10 @@ fn get_token(
 }
 
 /// Parse natural time expression into Unix timestamp
-fn parse_when(when: &str) -> crate::error::Result<i64> {
+pub(crate) fn parse_when(when: &str) -> crate::error::Result<i64> {
     use chrono::{Duration, Local, NaiveTime};
 
-    let when_lower = when.to_lowercase();
+    let when_lower = when.trim().to_lowercase();
     let now = Local::now();
 
     // Handle "in X" format
@@ -137,55 +137,44 @@ fn parse_when(when: &str) -> crate::error::Result<i64> {
         return parse_relative_duration(duration_str);
     }
 
-    // Handle "tomorrow" variants
-    if when_lower.starts_with("tomorrow") {
+    // Handle "tomorrow", "tomorrow 9am", and "tomorrow at 9am".
+    if let Some(suffix) = when_lower
+        .strip_prefix("tomorrow")
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with(char::is_whitespace))
+    {
         let tomorrow = now.date_naive() + Duration::days(1);
-
-        // Check for "tomorrow at HH:MM"
-        if when_lower.contains(" at ") {
-            let time_part = when_lower.split(" at ").nth(1).unwrap_or("9:00");
-            let time = parse_time(time_part)?;
-            let datetime = tomorrow.and_time(time);
-            return datetime
-                .and_local_timezone(Local)
-                .single()
-                .map(|dt| dt.timestamp())
-                .ok_or_else(|| crate::error::SlackError::Usage("Invalid timezone".into()));
-        }
-
-        // Default to 9am tomorrow
-        let time = NaiveTime::from_hms_opt(9, 0, 0).ok_or_else(|| {
-            crate::error::SlackError::Other("Failed to create default time 9:00".into())
-        })?;
-        let datetime = tomorrow.and_time(time);
-        return datetime
+        let suffix = suffix.trim();
+        let time = if suffix.is_empty() {
+            NaiveTime::from_hms_opt(9, 0, 0).ok_or_else(|| {
+                crate::error::SlackError::Other("Failed to create default time 9:00".into())
+            })?
+        } else {
+            parse_time(suffix.strip_prefix("at ").unwrap_or(suffix))?
+        };
+        return tomorrow
+            .and_time(time)
             .and_local_timezone(Local)
             .single()
             .map(|dt| dt.timestamp())
             .ok_or_else(|| crate::error::SlackError::Usage("Invalid timezone".into()));
     }
 
-    // Handle "today at HH:MM"
-    if when_lower.starts_with("today") {
+    // Handle "today", "today 9am", and "today at 9am".
+    if let Some(suffix) = when_lower
+        .strip_prefix("today")
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with(char::is_whitespace))
+    {
         let today = now.date_naive();
-
-        if when_lower.contains(" at ") {
-            let time_part = when_lower.split(" at ").nth(1).unwrap_or("17:00");
-            let time = parse_time(time_part)?;
-            let datetime = today.and_time(time);
-            return datetime
-                .and_local_timezone(Local)
-                .single()
-                .map(|dt| dt.timestamp())
-                .ok_or_else(|| crate::error::SlackError::Usage("Invalid timezone".into()));
-        }
-
-        // Default to 5pm today
-        let time = NaiveTime::from_hms_opt(17, 0, 0).ok_or_else(|| {
-            crate::error::SlackError::Other("Failed to create default time 17:00".into())
-        })?;
-        let datetime = today.and_time(time);
-        return datetime
+        let suffix = suffix.trim();
+        let time = if suffix.is_empty() {
+            NaiveTime::from_hms_opt(17, 0, 0).ok_or_else(|| {
+                crate::error::SlackError::Other("Failed to create default time 17:00".into())
+            })?
+        } else {
+            parse_time(suffix.strip_prefix("at ").unwrap_or(suffix))?
+        };
+        return today
+            .and_time(time)
             .and_local_timezone(Local)
             .single()
             .map(|dt| dt.timestamp())
@@ -512,6 +501,26 @@ mod tests {
     fn test_parse_when_date() {
         let result = parse_when("2025-12-25 14:00");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_when_day_suffix_forms_are_strict() {
+        assert!(parse_when("tomorrow 9am").is_ok());
+        assert!(parse_when("tomorrow at 9am").is_ok());
+        assert!(parse_when("today 14:30").is_ok());
+        assert!(parse_when("today at 2pm").is_ok());
+        assert!(parse_when("tomorrow sometime later").is_err());
+        assert!(parse_when("tomorrow9am").is_err());
+        assert!(parse_when("today at 9am trailing").is_err());
+    }
+
+    #[test]
+    fn test_parse_when_timestamp_and_rfc3339_are_deterministic() {
+        assert_eq!(parse_when("1893456000").unwrap(), 1_893_456_000);
+        assert_eq!(
+            parse_when("2030-01-01T00:00:00+00:00").unwrap(),
+            1_893_456_000
+        );
     }
 
     #[test]

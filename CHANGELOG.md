@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Message mutations and permalinks**: edit and delete messages, mark channels
+  read, retrieve strict permalinks, and best-effort enrich successful send/get
+  JSON while preserving plain output.
+- **Advanced and scheduled sending**: send Block Kit payloads and broadcast
+  thread replies, schedule messages up to 120 days ahead, and list or delete
+  queued messages.
 - **Message reading**: read exclusive date/timestamp-bounded channel history,
   collect all history pages, resolve authors and mentions from one paginated
   user-directory traversal, and select search result sort order.
