@@ -6,8 +6,8 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use slack_cli::cli::{
-    auth, channels, files, generate_completions, messages, reactions, reminders, status, users,
-    Cli, Commands,
+    api, auth, channels, files, generate_completions, messages, reactions, reminders, status,
+    users, Cli, Commands,
 };
 use slack_cli::error::SlackError;
 use slack_cli::output::OutputMode;
@@ -128,6 +128,15 @@ async fn run_command(cli: &Cli) -> Result<(), SlackError> {
         }
         Commands::Reminders(cmd) => {
             reminders::run(
+                cmd,
+                cli.plain,
+                cli.workspace.as_deref(),
+                cli.token.as_deref(),
+            )
+            .await
+        }
+        Commands::Api(cmd) => {
+            api::run(
                 cmd,
                 cli.plain,
                 cli.workspace.as_deref(),

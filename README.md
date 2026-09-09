@@ -6,6 +6,7 @@ A comprehensive Rust CLI tool for Slack, designed for AI agents and automation.
 
 - **Multiple authentication methods**: OAuth, browser tokens (xoxc+xoxd), direct tokens (xoxp/xoxb)
 - **Full workspace access**: Channels, messages, threads, search, files, reactions, reminders, status
+- **Generic API escape hatch**: `slack api` calls any Slack Web API method with your stored auth
 - **Agent-first design**: JSON output by default, optimized for AI consumption
 - **Minimal footprint**: No config files, tokens stored in system keyring
 - **Fast and reliable**: Built with Rust for performance and safety
@@ -321,6 +322,73 @@ slack reminders complete Rm123456789
 slack reminders delete Rm123456789
 ```
 
+### Generic API (`slack api`)
+
+Escape hatch for any Slack Web API method that doesn't have a dedicated
+command. Reuses your stored credentials (including browser xoxc token +
+xoxd cookie), the `-w`/`--workspace` selector, and `--token`/`SLACK_TOKEN`
+overrides — your token's scopes still apply, so a method can fail with
+`missing_scope` just as it would with curl.
+
+```bash
+# Call a method (POST is the default HTTP method)
+slack api conversations.create -f name=my-new-channel
+
+# GET with query parameters
+slack api conversations.info -X GET -f channel=C123456789
+
+# Typed fields: -F parses JSON booleans, numbers, arrays and objects
+slack api conversations.list -X GET -F limit=200 -F exclude_archived=true
+slack api chat.postMessage -f channel=C123 -f text=hi -F unfurl_links=false
+
+# Load the parameter object from a JSON file or stdin
+slack api chat.postMessage --input params.json
+echo '{"channel":"C123","text":"hi"}' | slack api chat.postMessage --input -
+
+# Full Slack URLs are accepted and normalized to the method name
+slack api https://slack.com/api/team.info -X GET
+```
+
+**Flags**
+
+| Flag | Description |
+|------|-------------|
+| `-X, --method <GET\|POST>` | HTTP method. Defaults to `POST` (unlike `gh api`, which defaults to GET). |
+| `-f, --raw-field key=value` | Add a parameter as a plain string. Repeatable. |
+| `-F, --field key=value` | Add a typed parameter: `true`/`false`, numbers, and JSON arrays/objects are parsed as JSON; anything else is a string. `-F key=null` is rejected — omit the field instead. Repeatable. |
+| `--input FILE` | Read the parameter object from a JSON file, or from stdin with `--input -`. Cannot be combined with `-f`/`-F`. Fields whose value is `null` are omitted, matching the CLI's form encoder. |
+
+Duplicate parameter names (across `-f`/`-F`) are rejected.
+
+**Request conventions**
+
+- Only `GET` and `POST` are supported. `GET` sends parameters as URL query
+  parameters; `POST` sends them form-encoded
+  (`application/x-www-form-urlencoded`), which is what the Slack Web API
+  expects.
+- There is no raw JSON request body: `--input` loads a JSON *parameter
+  object* which is then form-encoded like `-f`/`-F` fields. Nested arrays
+  and objects (e.g. `blocks`, `attachments`) are serialized as JSON strings,
+  per Slack convention.
+- Endpoints are Web API method names (`conversations.info`) or full
+  `https://slack.com/api/<method>` URLs, which are normalized to the method
+  name. URLs with other hosts, embedded credentials, query strings,
+  fragments, or extra path segments are rejected. (`SLACK_API_BASE_URL`
+  still overrides the base URL for testing/mocks.)
+- HTTP redirects are never followed, so your token and cookies can't leak
+  to another host.
+- No automatic pagination — pass `cursor`/`limit` yourself and follow
+  `response_metadata.next_cursor`.
+- Not supported: custom headers, file uploads, name→ID resolution, jq
+  filtering, or Edge API endpoints.
+
+**Output** is the full JSON response from Slack on success. `--plain` is not
+supported for `slack api`. Slack `ok: false` responses, rate limits, and
+network failures exit with status 1 and structured JSON error codes;
+invalid arguments exit with status 2. Rate limits are retried at most five
+times; a server-requested delay over 60 seconds is returned immediately
+as a rate-limit error rather than blocking or retrying too early.
+
 ## Output Modes
 
 By default, output is JSON (optimized for AI agents). Use `--plain` for human-readable TSV output:
@@ -333,6 +401,8 @@ slack channels list
 slack --plain channels list
 slack channels list --plain
 ```
+
+`slack api` is JSON-only and rejects `--plain`.
 
 ## Global Options
 

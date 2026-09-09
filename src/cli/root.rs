@@ -4,6 +4,7 @@
 
 use clap::{Parser, Subcommand};
 
+use super::api::ApiCmd;
 use super::auth::AuthCmd;
 use super::channels::ChannelsCmd;
 use super::completions::CompletionsArgs;
@@ -80,6 +81,9 @@ pub enum Commands {
 
     /// Reminder operations
     Reminders(RemindersCmd),
+
+    /// Make an authenticated request to any Slack API method
+    Api(ApiCmd),
 
     /// Generate shell completions
     Completions(CompletionsArgs),
