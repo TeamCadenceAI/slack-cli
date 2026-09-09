@@ -394,7 +394,7 @@ async fn delete_reminder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
+    use chrono::{Duration, Local, Timelike};
     use clap::{CommandFactory, Parser};
 
     use crate::cli::Cli;
@@ -556,5 +556,89 @@ mod tests {
         assert!(parse_relative_duration("1h").is_ok());
         assert!(parse_relative_duration("2d").is_ok());
         assert!(parse_relative_duration("invalid").is_err());
+    }
+
+    fn local_datetime(timestamp: i64) -> chrono::DateTime<Local> {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+            .unwrap()
+            .with_timezone(&Local)
+    }
+
+    #[test]
+    fn test_parse_when_date_defaults_to_nine_local() {
+        let parsed = local_datetime(parse_when("2030-01-15").unwrap());
+        assert_eq!(
+            parsed.date_naive(),
+            chrono::NaiveDate::from_ymd_opt(2030, 1, 15).unwrap()
+        );
+        assert_eq!((parsed.hour(), parsed.minute(), parsed.second()), (9, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_when_local_date_and_time_preserves_fields() {
+        let parsed = local_datetime(parse_when("2030-01-15 14:37").unwrap());
+        assert_eq!(
+            parsed.date_naive(),
+            chrono::NaiveDate::from_ymd_opt(2030, 1, 15).unwrap()
+        );
+        assert_eq!(
+            (parsed.hour(), parsed.minute(), parsed.second()),
+            (14, 37, 0)
+        );
+    }
+
+    #[test]
+    fn test_parse_when_tomorrow_without_time_defaults_to_nine_local() {
+        let before = Local::now().date_naive();
+        let parsed = local_datetime(parse_when("tomorrow").unwrap());
+        let after = Local::now().date_naive();
+
+        assert!(
+            parsed.date_naive() == before + Duration::days(1)
+                || parsed.date_naive() == after + Duration::days(1)
+        );
+        assert_eq!((parsed.hour(), parsed.minute(), parsed.second()), (9, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_when_today_without_time_defaults_to_seventeen_local() {
+        let before = Local::now().date_naive();
+        let parsed = local_datetime(parse_when("today").unwrap());
+        let after = Local::now().date_naive();
+
+        assert!(parsed.date_naive() == before || parsed.date_naive() == after);
+        assert_eq!(
+            (parsed.hour(), parsed.minute(), parsed.second()),
+            (17, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_parse_relative_duration_spelled_out_units() {
+        for (input, seconds) in [
+            ("2 min", 2 * 60),
+            ("2 mins", 2 * 60),
+            ("2 minutes", 2 * 60),
+            ("2 hour", 2 * 60 * 60),
+            ("2 hours", 2 * 60 * 60),
+            ("2 day", 2 * 24 * 60 * 60),
+            ("2 days", 2 * 24 * 60 * 60),
+        ] {
+            let before = Local::now().timestamp();
+            let parsed = parse_relative_duration(input).unwrap();
+            let after = Local::now().timestamp();
+            assert!(parsed >= before + seconds, "{input} was too early");
+            assert!(parsed <= after + seconds, "{input} was too late");
+        }
+    }
+
+    #[test]
+    fn test_parse_relative_duration_rejects_invalid_unit() {
+        let error = parse_relative_duration("3 weeks").unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::SlackError::Usage(message)
+                if message.contains("Invalid duration: '3 weeks'")
+        ));
     }
 }
