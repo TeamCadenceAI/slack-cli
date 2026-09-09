@@ -69,6 +69,12 @@ slack completions powershell >> $PROFILE
 # Authenticate with a token
 slack auth add --token xoxp-your-token-here
 
+# Or, optionally, authorize through your own Slack app after configuring its
+# redirect URL as described under Authentication
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+slack auth add
+
 # Check auth status
 slack auth status
 
@@ -122,6 +128,51 @@ slack auth remove T1234567890
 # Get help extracting browser tokens
 slack auth browser-help
 ```
+
+#### OAuth with a Slack app
+
+OAuth is an optional alternative to direct tokens and local session import. In
+your Slack app's **OAuth & Permissions** settings, add this exact redirect URL:
+
+```text
+http://localhost:8765/callback
+```
+
+Then export the Slack **app credentials** shown in **Basic Information** (these
+identify the app; they are not a Slack access token):
+
+```bash
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+```
+
+Run OAuth without a positional workspace or `--url`:
+
+```bash
+slack auth add             # default OAuth route; opens a browser
+slack auth add --oauth     # explicitly selects the same browser flow
+slack auth add --manual    # prints the URL and asks for the full redirect URL
+
+# Replace the defaults with an explicit comma-separated scope list
+slack auth add --oauth --scopes channels:read,channels:history,users:read,search:read,chat:write
+```
+
+The browser flow listens on `localhost:8765` for the callback. The manual flow
+uses the same configured callback URL but does not need to receive it: after
+Slack redirects (the page may fail to load), paste the full URL from the
+browser's address bar into the CLI. If either credential variable is missing,
+`auth add` returns a configuration error instead of starting OAuth.
+
+The current CLI scope defaults are `channels:read`, `channels:history`,
+`users:read`, and `search:read`. `--scopes` replaces that list; scopes needed
+by other commands are not added automatically, so request the complete set
+your Slack app and intended commands require. Successful OAuth tokens use the
+same system keyring as other auth methods, or the existing file store when
+`SLACK_TOKEN_STORE_PATH` is set.
+
+A positional workspace, `--url`, or `--from-browser` selects local token
+extraction instead of OAuth. Direct `--token` and `--xoxc`/`--xoxd` flows are
+unchanged.
 
 #### Selecting a workspace
 

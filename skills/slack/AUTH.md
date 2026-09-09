@@ -31,12 +31,40 @@ slack auth add --token xoxb-your-bot-token
 # Browser tokens (full workspace access without creating a Slack app)
 slack auth add --xoxc xoxc-... --xoxd xoxd-...
 
-# OAuth flow (opens browser)
-slack auth add --oauth
-
-# Manual OAuth (no browser — prints URL for you to visit)
-slack auth add --oauth --manual
+# OAuth through a configured Slack app
+slack auth add             # default flow; opens a browser
+slack auth add --oauth     # explicitly selects the same browser flow
+slack auth add --manual    # prints a URL; paste the full redirect URL
 ```
+
+For OAuth, add `http://localhost:8765/callback` as an exact redirect URL in the
+Slack app's **OAuth & Permissions** settings, then export its **Basic
+Information** credentials:
+
+```bash
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+```
+
+These values identify the Slack app; neither is a Slack access token. The
+browser mode listens for the localhost callback. Manual mode uses the same
+redirect URL but asks you to paste the full URL after Slack redirects, so it is
+fine if the localhost page does not load. If either variable is missing, OAuth
+returns a configuration error.
+
+The CLI currently requests `channels:read,channels:history,users:read,search:read`
+by default. Replace this list with the complete scopes your intended commands
+need by using the existing comma-separated syntax, for example:
+
+```bash
+slack auth add --oauth --scopes channels:read,channels:history,users:read,search:read,chat:write
+```
+
+`--scopes` replaces rather than extends the defaults; new command scopes are
+not added automatically. OAuth tokens are stored through the same system
+keyring or `SLACK_TOKEN_STORE_PATH` file store as direct and browser tokens.
+A positional workspace, `--url`, or `--from-browser` selects local extraction
+instead of OAuth.
 
 Run `slack auth browser-help` for step-by-step instructions on extracting browser tokens.
 
@@ -109,6 +137,8 @@ slack auth remove T1234567890     # remove a workspace (team ID or domain)
 | `SLACK_TOKEN` | Override token for all commands |
 | `SLACK_WORKSPACE` | Default workspace (team ID or domain, same as `-w`) |
 | `SLACK_TOKEN_STORE_PATH` | Use a JSON file instead of system keyring (set this first if the keyring is unavailable) |
+| `SLACK_CLIENT_ID` | Slack app client ID required to start OAuth |
+| `SLACK_CLIENT_SECRET` | Slack app client secret required to exchange an OAuth code |
 
 ## Diagnosing auth issues
 

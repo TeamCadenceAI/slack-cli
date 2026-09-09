@@ -77,12 +77,30 @@ slack auth list --check
 slack auth add --token xoxp-your-token
 slack auth add --xoxc xoxc-... --xoxd xoxd-...
 
+# Optional OAuth through a configured Slack app
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+slack auth add             # default browser OAuth route
+slack auth add --oauth     # the same route, selected explicitly
+slack auth add --manual    # print URL; paste the full redirect URL
+
 # Check current auth / switch default workspace
 slack auth status
 slack auth switch T1234567890
 ```
 
-See [AUTH.md](AUTH.md) for full authentication reference.
+For OAuth, configure the Slack app redirect URL exactly as
+`http://localhost:8765/callback`. Both browser and manual modes use it; manual
+mode may show an unreachable localhost page before its URL is pasted into the
+CLI. Missing app credentials produce a configuration error. The credentials
+above identify the Slack app and are not an access token; resulting tokens are
+saved in the same keyring/file store as other methods.
+
+OAuth currently defaults to `channels:read,channels:history,users:read,search:read`.
+Use `--scopes scope1,scope2` to replace (not extend) that list; scopes for other
+commands are not added automatically. A positional workspace or `--url` uses
+local token extraction rather than OAuth. See [AUTH.md](AUTH.md) for the full
+authentication reference.
 
 ## Resolving a workspace by name (IMPORTANT for agents)
 

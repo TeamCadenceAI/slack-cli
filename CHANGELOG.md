@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Channel bookmarks**: list, add, and remove channel link bookmarks with
   `slack bookmarks`, including optional emoji and script-friendly TSV output.
 
+### Changed
+
+- **OAuth documentation**: clarify that `auth add` reaches the configured Slack
+  app OAuth flow by default, document browser/manual routes, callback setup,
+  credential errors, token storage, and explicit scope replacement.
+
 ## [0.2.1] - 2026-09-08
 
 ### Fixed
