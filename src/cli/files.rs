@@ -333,13 +333,16 @@ async fn upload_file(
     }
 
     let filename = upload_filename(path, filename_override)?;
-    let mut file = std::fs::File::open(path)?;
-    if !file.metadata()?.is_file() {
+    // Check the path before opening it: on Windows, opening a directory returns
+    // an access-denied error instead of a file handle whose metadata we can
+    // inspect.
+    if !std::fs::metadata(path)?.is_file() {
         return Err(SlackError::Usage(format!(
             "upload path is not a regular file: {}",
             path.display()
         )));
     }
+    let mut file = std::fs::File::open(path)?;
 
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
