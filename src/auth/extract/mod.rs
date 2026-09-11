@@ -24,6 +24,60 @@ pub mod profiles;
 use crate::auth::browser::BrowserTokens;
 use crate::error::Result;
 
+const EXTRACT_FIXTURE_ENV: &str = "SLACK_EXTRACT_FIXTURE";
+
+#[derive(serde::Deserialize)]
+struct FixtureData {
+    workspaces: Vec<FixtureWorkspace>,
+}
+
+#[derive(serde::Deserialize)]
+struct FixtureWorkspace {
+    xoxc: String,
+    xoxd: String,
+    #[serde(default)]
+    team_id: Option<String>,
+    #[serde(default)]
+    team_domain: Option<String>,
+    #[serde(default)]
+    team_name: Option<String>,
+    source: String,
+}
+
+/// Load extraction results from `SLACK_EXTRACT_FIXTURE`, when set.
+///
+/// This is a test-only seam used by CLI integration tests so they do not scan
+/// real browser profiles. The referenced JSON file has the shape
+/// `{"workspaces":[{"xoxc":"xoxc-...","xoxd":"xoxd-...", ...}]}`.
+fn fixture_workspaces() -> Option<Result<Vec<ExtractedWorkspace>>> {
+    let path = std::env::var_os(EXTRACT_FIXTURE_ENV)?;
+    Some((|| {
+        let contents = std::fs::read_to_string(path)?;
+        let fixture: FixtureData = serde_json::from_str(&contents)?;
+        Ok(fixture
+            .workspaces
+            .into_iter()
+            .map(|workspace| ExtractedWorkspace {
+                tokens: BrowserTokens::new(workspace.xoxc, workspace.xoxd),
+                team_id: workspace.team_id,
+                team_domain: workspace.team_domain,
+                team_name: workspace.team_name,
+                source: workspace.source,
+            })
+            .collect())
+    })())
+}
+
+fn source_matches_browser(source: &str, browser: Option<&str>) -> bool {
+    match browser {
+        None => true,
+        Some(browser) => source
+            .split('/')
+            .next()
+            .is_some_and(|source_browser| source_browser.eq_ignore_ascii_case(browser)),
+    }
+}
+
 /// A single workspace's credentials discovered on the local machine.
 pub struct ExtractedWorkspace {
     /// The paired browser tokens (`xoxc` token + `xoxd` cookie).
@@ -91,6 +145,28 @@ pub fn discover_workspaces(browser: Option<&str>) -> Vec<DiscoveredWorkspace> {
     let mut out: Vec<DiscoveredWorkspace> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    if let Some(fixture) = fixture_workspaces() {
+        for workspace in fixture.unwrap_or_default() {
+            if !source_matches_browser(&workspace.source, browser) {
+                continue;
+            }
+            let key = match (&workspace.team_id, &workspace.team_domain) {
+                (Some(id), _) => format!("id:{id}"),
+                (None, Some(domain)) => format!("dom:{domain}"),
+                (None, None) => format!("xoxc:{}", workspace.tokens.xoxc),
+            };
+            if seen.insert(key) {
+                out.push(DiscoveredWorkspace {
+                    team_id: workspace.team_id,
+                    team_domain: workspace.team_domain,
+                    team_name: workspace.team_name,
+                    source: workspace.source,
+                });
+            }
+        }
+        return out;
+    }
+
     for profile in profiles::discover_profiles(browser) {
         let teams = match chromium::extract_tokens_from_leveldb(&profile.local_storage_leveldb) {
             Ok(teams) => teams,
@@ -118,6 +194,17 @@ pub fn discover_workspaces(browser: Option<&str>) -> Vec<DiscoveredWorkspace> {
 }
 
 pub fn extract_workspaces(opts: &ExtractOptions) -> Result<Vec<ExtractedWorkspace>> {
+    if let Some(fixture) = fixture_workspaces() {
+        let workspaces = fixture?
+            .into_iter()
+            .filter(|workspace| source_matches_browser(&workspace.source, opts.browser.as_deref()))
+            .collect();
+        return Ok(filter_by_url(
+            dedup_workspaces(workspaces),
+            opts.url.as_deref(),
+        ));
+    }
+
     let mut workspaces: Vec<ExtractedWorkspace> = Vec::new();
 
     for profile in profiles::discover_profiles(opts.browser.as_deref()) {

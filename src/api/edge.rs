@@ -119,10 +119,7 @@ impl EdgeClient {
             .await
             .map_err(SlackError::Network)?;
 
-        let body: EdgeApiResponse<ClientBootResponse> =
-            response.json().await.map_err(SlackError::Network)?;
-
-        body.into_result()
+        decode_response::<ClientBootResponse>(response).await
     }
 
     /// Get conversation/channel information via Edge API
@@ -145,10 +142,7 @@ impl EdgeClient {
             .await
             .map_err(SlackError::Network)?;
 
-        let body: EdgeApiResponse<ConversationViewResponse> =
-            response.json().await.map_err(SlackError::Network)?;
-
-        body.into_result()
+        decode_response::<ConversationViewResponse>(response).await
     }
 
     /// Search channels via Edge API
@@ -170,10 +164,7 @@ impl EdgeClient {
             .await
             .map_err(SlackError::Network)?;
 
-        let body: EdgeApiResponse<SearchChannelsResponse> =
-            response.json().await.map_err(SlackError::Network)?;
-
-        body.into_result()
+        decode_response::<SearchChannelsResponse>(response).await
     }
 
     /// Make a generic Edge API request
@@ -194,10 +185,30 @@ impl EdgeClient {
             .await
             .map_err(SlackError::Network)?;
 
-        let body: EdgeApiResponse<T> = response.json().await.map_err(SlackError::Network)?;
-
-        body.into_result()
+        decode_response::<T>(response).await
     }
+}
+
+/// Decode an Edge API HTTP response.
+///
+/// A non-2xx status is reported as an API error *before* the body is
+/// decoded, so a gateway/proxy error page (or a stale cached payload) is
+/// never mistaken for a successful Edge response.
+async fn decode_response<T>(response: reqwest::Response) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let detail = body.trim();
+        return Err(SlackError::Api {
+            error: format!("HTTP {}", status),
+            detail: (!detail.is_empty()).then(|| detail.chars().take(300).collect()),
+        });
+    }
+    let body: EdgeApiResponse<T> = response.json().await.map_err(SlackError::Network)?;
+    body.into_result()
 }
 
 /// Generic Edge API response wrapper

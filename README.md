@@ -5,7 +5,8 @@ A comprehensive Rust CLI tool for Slack, designed for AI agents and automation.
 ## Features
 
 - **Multiple authentication methods**: OAuth, browser tokens (xoxc+xoxd), direct tokens (xoxp/xoxb)
-- **Full workspace access**: Channels, messages, threads, search, files, reactions, reminders, status
+- **Full workspace access**: Manage channels, messages, DMs, users, user groups, files, pins, bookmarks, custom emoji, reactions, reminders, and status
+- **Message and file workflows**: Edit, delete, schedule, and search messages; upload and search files
 - **Generic API escape hatch**: `slack api` calls any Slack Web API method with your stored auth
 - **Agent-first design**: JSON output by default, optimized for AI consumption
 - **Minimal footprint**: No config files, tokens stored in system keyring
@@ -69,6 +70,12 @@ slack completions powershell >> $PROFILE
 # Authenticate with a token
 slack auth add --token xoxp-your-token-here
 
+# Or, optionally, authorize through your own Slack app after configuring its
+# redirect URL as described under Authentication
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+slack auth add
+
 # Check auth status
 slack auth status
 
@@ -123,6 +130,51 @@ slack auth remove T1234567890
 slack auth browser-help
 ```
 
+#### OAuth with a Slack app
+
+OAuth is an optional alternative to direct tokens and local session import. In
+your Slack app's **OAuth & Permissions** settings, add this exact redirect URL:
+
+```text
+http://localhost:8765/callback
+```
+
+Then export the Slack **app credentials** shown in **Basic Information** (these
+identify the app; they are not a Slack access token):
+
+```bash
+export SLACK_CLIENT_ID="your-slack-app-client-id"
+export SLACK_CLIENT_SECRET="your-slack-app-client-secret"
+```
+
+Run OAuth without a positional workspace or `--url`:
+
+```bash
+slack auth add             # default OAuth route; opens a browser
+slack auth add --oauth     # explicitly selects the same browser flow
+slack auth add --manual    # prints the URL and asks for the full redirect URL
+
+# Replace the defaults with an explicit comma-separated scope list
+slack auth add --oauth --scopes channels:read,channels:history,users:read,search:read,chat:write
+```
+
+The browser flow listens on `localhost:8765` for the callback. The manual flow
+uses the same configured callback URL but does not need to receive it: after
+Slack redirects (the page may fail to load), paste the full URL from the
+browser's address bar into the CLI. If either credential variable is missing,
+`auth add` returns a configuration error instead of starting OAuth.
+
+The current CLI scope defaults are `channels:read`, `channels:history`,
+`users:read`, and `search:read`. `--scopes` replaces that list; scopes needed
+by other commands are not added automatically, so request the complete set
+your Slack app and intended commands require. Successful OAuth tokens use the
+same system keyring as other auth methods, or the existing file store when
+`SLACK_TOKEN_STORE_PATH` is set.
+
+A positional workspace, `--url`, or `--from-browser` selects local token
+extraction instead of OAuth. Direct `--token` and `--xoxc`/`--xoxd` flows are
+unchanged.
+
 #### Selecting a workspace
 
 With multiple workspaces configured, target one per command with `-w` /
@@ -176,6 +228,63 @@ slack channels dms
 slack channels export --output channels.csv
 ```
 
+#### Channel members
+
+```bash
+# Member IDs, preserving Slack's order
+slack channels members "#general"
+
+# Resolve IDs to usernames (display name, then ID, are fallbacks)
+slack --plain channels members "#general" --resolve
+```
+
+Member listing requires access to the conversation and its applicable read
+scope. `--resolve` additionally requires `users:read` and loads the workspace
+user directory once. IDs Slack omits from that directory remain visible with
+the ID as their name.
+
+#### Channel lifecycle
+
+```bash
+slack channels create project-room
+slack channels create leadership --private
+slack channels join "#project-room"
+slack channels invite "#project-room" @alice U123456789
+slack channels set-topic "#project-room" "Quarterly launch"
+slack channels set-purpose "#project-room" "Coordinate the launch"
+slack channels rename "#project-room" launch-room
+slack channels leave "#launch-room"
+slack channels archive "#launch-room"
+slack channels unarchive "#launch-room"
+```
+
+Names and IDs are accepted for channel operands, including archived channel
+names. Invitees are resolved to user IDs and deduplicated before one invite;
+if any user cannot be resolved, nobody is invited. These operations require
+the applicable Slack channel-management, join, and invite scopes and, where
+Slack requires it, membership or administrator permission. Archiving is
+destructive to normal channel use until an authorized user unarchives it;
+the CLI does not ask for confirmation.
+
+Pass an empty string to `set-topic` or `set-purpose` to clear it. JSON
+mutations return `{"ok":true,"channel":...}`; `--plain` prints the channel ID.
+
+#### Unread overview
+
+```bash
+slack channels unread
+slack --plain channels unread
+```
+
+This command uses the Web API only. It checks joined public/private channels,
+DMs, and group DMs and includes positive counts when `conversations.info`
+exposes `unread_count_display` or `unread_count`. Slack omits these fields for
+some workspaces and token types, so this is a capability-dependent overview,
+not a guaranteed complete unread view. JSON lists omitted-count conversation
+IDs in `unavailable_channels`; if no eligible conversation exposes any count,
+the command fails with `unread_unavailable`. Applicable conversation read
+scopes are required.
+
 ### Messages (`slack messages` or `slack m`)
 
 ```bash
@@ -210,6 +319,29 @@ slack messages search "in:#general project" --count 50
 slack messages get "C123456789:1234567890.123456"
 ```
 
+#### Bounded and resolved reading
+
+```bash
+# Exclusive UTC bounds: dates, RFC3339 instants, or Slack timestamps
+slack messages list "#general" --since 2026-01-01 --until 2026-02-01
+
+# Fetch complete bounded history; numeric --limit is ignored with --all
+slack messages list "#general" --since 1735689600.000001 --all
+
+# Resolve authors and <@user> mentions in any read command
+slack messages list "#general" --resolve-users
+slack messages thread "#general" 1234567890.123456 --resolve-users
+slack messages search "incident" --sort score --sort-dir desc --resolve-users
+```
+
+`--since` and `--until` are exclusive UTC bounds. A duration `--limit` still
+contributes an oldest bound, and the later of it and `--since` is used.
+`--all` conflicts with `--cursor`, reads pages of 200 in Slack response order,
+and ignores a numeric `--limit`. User resolution loads the complete paginated
+workspace directory once per nonempty command. JSON keeps `user` and adds
+`user_name`; explicitly resolved `--plain` output uses the name in its second
+(author) column and rewrites known mentions while preserving unknown markup.
+
 #### Message formatting
 
 `messages send` treats input as **standard Markdown** by default (`--format
@@ -231,6 +363,62 @@ Inline code `` `…` ``, fenced code blocks ```` ``` ````, and existing mrkdwn
 spans (`<@U…>` mentions, `<url|text>` links) are passed through untouched. Use
 `--format plain` to send text verbatim with mrkdwn parsing disabled.
 
+Immediate send JSON adds a top-level `"permalink"`, and `messages get` fills
+the message object's existing `"permalink"` field, for example:
+
+```json
+{"ok":true,"channel":"C123456789","ts":"1234567890.123456","message":{"ts":"1234567890.123456"},"permalink":"https://workspace.slack.com/archives/C123456789/p1234567890123456"}
+{"ts":"1234567890.123456","text":"hello","permalink":"https://workspace.slack.com/archives/C123456789/p1234567890123456"}
+```
+
+Permalink lookup is best-effort for these two commands: a successful send/read
+remains successful with `permalink: null` and a warning on stderr if enrichment
+fails. Their existing `--plain` output is unchanged and makes no permalink
+request.
+
+#### Message operations
+
+```bash
+slack messages edit "#general:1234567890.123456" "Updated **text**"
+slack messages edit "https://workspace.slack.com/archives/C123456789/p1234567890123456" "literal *text*" --format plain
+slack messages delete "#general:1234567890.123456"
+slack messages permalink "#general:1234567890.123456"
+slack messages mark "#general" 1234567890.123456
+```
+
+Identifiers are parsed locally as `channel:timestamp` or Slack permalinks;
+permalink URLs are never fetched. Explicit `messages permalink` errors are
+strictly propagated. Mutation JSON reports `ok`, channel, and message IDs;
+`--plain` prints only the timestamp (or URL for `permalink`). Delete does not
+prompt for confirmation, and Slack remains authoritative for ownership and
+permissions.
+
+#### Advanced and scheduled sending
+
+```bash
+# Broadcast a thread reply (requires --thread-ts)
+slack messages send "#general" "Visible reply" --thread-ts 1234567890.123456 --broadcast
+
+# Block Kit from a file, with optional fallback text
+slack messages send "#general" "Fallback text" --blocks blocks.json
+cat blocks.json | slack messages send "#general" --blocks -
+
+# Natural times use the machine's local timezone
+slack messages send "#general" "Daily summary" --schedule "tomorrow at 9am"
+slack messages scheduled list
+slack messages scheduled delete "#general" Q123456789
+```
+
+`--blocks` must contain a nonempty JSON array; block strings are not Markdown
+converted. Block-only sends are allowed. `--blocks -` owns stdin and conflicts
+with `--stdin`. Scheduling accepts natural expressions, Unix timestamps,
+RFC3339, and existing reminder date forms, must be in the future and no more
+than 120 days away, and supports threads, formats, and blocks. `--schedule`
+conflicts with `--mark-read` and `--broadcast`. Scheduled sends do not post,
+mark read, or fetch a permalink; JSON reports `permalink: null`, while plain
+send output remains one scheduled message ID. Scheduled list plain output is
+`id<TAB>channel_id<TAB>post_at<TAB>text`.
+
 ### Users (`slack users` or `slack u`)
 
 ```bash
@@ -243,13 +431,28 @@ slack users list --active-only
 # Get current user info
 slack users me
 
-# Get user info by ID or name
+# Get user info by ID, name, or email
 slack users info U123456789
 slack users info @username
+slack users info alice@example.com
+
+# Send a direct message (opens or reuses the IM, then sends normally)
+slack messages send @username "Hello directly"
+slack messages send U123456789 "Hello by user ID"
+
+# List user groups and group members
+slack users groups list
+slack users groups members @engineering
+slack users groups members S123456789 --resolve
 
 # Export users to CSV
 slack users export --output users.csv
 ```
+
+Email lookup requires `users:read.email`, and user-group commands require
+`usergroups:read`. Direct-message opening uses `conversations.open` and normally
+requires `im:write` (or the applicable conversation-write scope for the Slack
+token type). Slack API missing-scope errors are returned unchanged.
 
 ### Files (`slack files` or `slack f`)
 
@@ -260,15 +463,34 @@ slack files list
 # List files in a channel
 slack files list --channel "#general"
 
-# List files by type
-slack files list --types images,documents
+# Filter and paginate files
+slack files list --user U123456789 --limit 50 --cursor NEXT_CURSOR
 
 # Get file info
 slack files info F123456789
 
-# Download a file
-slack files download F123456789 --output ./downloads/
+# Download a file (optionally emit base64)
+slack files get F123456789 --output ./downloads/report.pdf
+slack files get F123456789 --base64
+
+# Upload a file (filename defaults to the path basename)
+slack files upload ./report.pdf --channel "#general" --title "Quarterly report"
+slack files upload ./data.bin --filename archive.bin
+
+# Share an upload in a thread with a comment
+slack files upload ./notes.txt --channel C123456789 \
+  --comment "Meeting notes" --thread-ts 1234567890.123456
+
+# Search files (user or browser token only)
+slack files search "quarterly report"
+slack files search "from:alice has:pdf" --count 50 --page 2
 ```
+
+Uploads use Slack's external-upload flow and require the `files:write` scope.
+`--filename` must be supplied when the path has no UTF-8 basename; otherwise
+its standalone value overrides the basename. `--comment` and `--thread-ts`
+require `--channel`. File search requires `search:read` and a user OAuth or
+stored browser token; Slack does not support file search with bot tokens.
 
 ### Reactions (`slack reactions` or `slack r`)
 
@@ -283,6 +505,51 @@ slack reactions remove C123456789 1234567890.123456 thumbsup
 slack reactions list C123456789 1234567890.123456
 ```
 
+### Pins (`slack pins`)
+
+```bash
+# Pin or unpin a message
+slack pins add "#general" 1234567890.123456
+slack pins remove C123456789 1234567890.123456
+
+# List all pinned items in a channel
+slack pins list "#general"
+```
+
+Adding and removing pins requires `pins:write`; listing requires `pins:read`.
+Pin list JSON preserves message, file, and other item records returned by Slack.
+
+### Emoji (`slack emoji`)
+
+```bash
+# List workspace custom emoji
+slack emoji list
+slack --plain emoji list
+```
+
+`emoji list` requires `emoji:read` and returns custom workspace emoji only,
+including unchanged image URLs and `alias:<name>` values. It does not include
+Slack's built-in Unicode emoji.
+
+### Bookmarks (`slack bookmarks`)
+
+```bash
+# List channel bookmarks
+slack bookmarks list "#general"
+
+# Add a link bookmark, optionally with an emoji
+slack bookmarks add "#general" "Team docs" https://example.com/docs
+slack bookmarks add C123456789 "Runbook" https://example.com/runbook --emoji :books:
+
+# Remove a bookmark
+slack bookmarks remove "#general" Bk123456789
+```
+
+Listing requires `bookmarks:read`; adding and removing require
+`bookmarks:write`. JSON output retains optional bookmark metadata. With
+`--plain`, lists use `id<TAB>title<TAB>link<TAB>emoji`, while mutations print
+the bookmark ID.
+
 ### Status (`slack status` or `slack s`)
 
 ```bash
@@ -290,12 +557,12 @@ slack reactions list C123456789 1234567890.123456
 slack status get
 
 # Set status with emoji and text
-slack status set ":coffee:" "Taking a break"
+slack status set "Taking a break" --emoji coffee
 
 # Set status with expiration
-slack status set ":meeting:" "In a meeting" --expires 1h
-slack status set ":calendar:" "Out of office" --expires today
-slack status set ":palm_tree:" "On vacation" --expires tomorrow
+slack status set "In a meeting" --emoji meeting --expires 1h
+slack status set "Out of office" --emoji calendar --expires today
+slack status set "On vacation" --emoji palm_tree --expires tomorrow
 
 # Clear status
 slack status clear
@@ -312,8 +579,8 @@ slack status presence auto
 slack reminders list
 
 # Create a reminder
-slack reminders add "Review PRs" --time "in 2 hours"
-slack reminders add "Team meeting" --time "tomorrow at 10am"
+slack reminders add "Review PRs" --when "in 2 hours"
+slack reminders add "Team meeting" --when "tomorrow at 10am"
 
 # Complete a reminder
 slack reminders complete Rm123456789
@@ -379,8 +646,9 @@ Duplicate parameter names (across `-f`/`-F`) are rejected.
   to another host.
 - No automatic pagination — pass `cursor`/`limit` yourself and follow
   `response_metadata.next_cursor`.
-- Not supported: custom headers, file uploads, name→ID resolution, jq
-  filtering, or Edge API endpoints.
+- Not supported by `slack api`: custom headers, raw-body file uploads,
+  name→ID resolution, jq filtering, or Edge API endpoints. Use
+  `slack files upload` for Slack's supported external-upload flow.
 
 **Output** is the full JSON response from Slack on success. `--plain` is not
 supported for `slack api`. Slack `ok: false` responses, rate limits, and
@@ -437,12 +705,18 @@ slack channels list --plain
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Authentication required |
-| 3 | Invalid arguments |
-| 4 | API error |
-| 5 | Rate limited |
-| 6 | Network error |
+| 1 | Any runtime failure: authentication required, API error (`ok: false`), rate limited, network error, not found, etc. |
+| 2 | Usage error: invalid arguments or flags (including errors reported by the argument parser) |
+
+The exit code only distinguishes usage errors from runtime failures. To find
+out *what* failed, read the JSON error object on stdout — its `code` field is
+stable (`auth_required`, `api_error`, `rate_limited`, `network_error`,
+`channel_not_found`, `user_not_found`, `search_not_available`, `usage_error`,
+…) and `detail` carries the Slack error string when there is one:
+
+```json
+{"error": true, "code": "auth_required", "message": "Authentication required. Run: slack auth add", "detail": null}
+```
 
 ## Development
 

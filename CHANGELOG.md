@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Direct messages by user**: send directly to `@username` or a user ID by
+  opening or reusing the user's IM conversation.
+- **User lookup by email**: resolve email addresses through
+  `users.lookupByEmail` with `slack users info`.
+- **User groups**: list enabled groups and their members, with optional bulk
+  user-name resolution.
+- **Message editing**: replace message text by `channel:timestamp` or Slack
+  permalink, with Markdown-to-mrkdwn conversion or verbatim text.
+- **Message deletion**: delete a message by `channel:timestamp` or Slack
+  permalink without an interactive prompt.
+- **Message permalinks**: retrieve strict permalinks and best-effort enrich
+  successful send/get JSON while preserving plain output.
+- **Broadcast thread replies**: make a thread reply visible in its channel with
+  `messages send --broadcast`.
+- **Message read markers**: mark a channel read through a timestamp, directly
+  or after an immediate send.
+- **Scheduled messages**: schedule messages up to 120 days ahead, then list or
+  delete queued messages.
+- **Block Kit messages**: send a nonempty Block Kit JSON array from a file or
+  stdin, with optional fallback text.
+- **Resolved message output**: resolve authors and mentions from one paginated
+  workspace user-directory traversal.
+- **Bounded message history**: read exclusive date/timestamp bounds and fetch
+  complete channel history with cursor pagination.
+- **Message search sorting**: order search results by score or timestamp in
+  ascending or descending order.
+- **Channel members**: list channel member IDs with optional bulk user-name
+  resolution.
+- **Channel lifecycle**: create, join, leave, archive, restore, invite to,
+  rename, and update the topic or purpose of channels.
+- **Unread overview**: show capability-dependent Web API unread counts and
+  report channels for which Slack omits count data.
+- **File uploads**: upload named files through Slack's supported external-upload
+  flow, optionally sharing them to a channel or thread.
+- **File search**: search workspace files with a user OAuth or browser token,
+  preserving Slack pagination metadata.
+- **Pins**: add, remove, and list channel pins while preserving message, file,
+  and other pin item payloads in JSON output.
+- **Custom emoji list**: list workspace custom emoji URLs and aliases with
+  sorted TSV output available through `--plain`.
+- **Channel bookmarks**: list, add, and remove channel link bookmarks with an
+  optional emoji and script-friendly TSV output.
+
+### Changed
+
+- **OAuth documentation**: clarify that `auth add` reaches the configured Slack
+  app OAuth flow by default, document browser/manual routes, callback setup,
+  credential errors, token storage, and explicit scope replacement.
+
+### Fixed
+
+- **Edge API HTTP status handling**: `EdgeClient` decoded the response body
+  before checking the HTTP status, so a gateway/proxy error carrying a
+  plausible `ok: true` payload could be accepted as success. Non-2xx responses
+  are now reported as `api_error` with `HTTP <status>` and the (truncated) body
+  as `detail`, matching the Web API client.
+- **Exit-code documentation**: README/AGENTS.md documented exit codes 2–6 for
+  auth/usage/API/rate-limit/network failures that the CLI never emitted. The
+  CLI exits `1` for any runtime failure and `2` for usage errors; the JSON
+  `code` field is the machine-readable discriminator. Docs now say so.
+
 ## [0.2.1] - 2026-09-08
 
 ### Fixed

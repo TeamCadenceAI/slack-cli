@@ -22,7 +22,22 @@ slack messages list "#general" --include-activity
 
 # Paginate
 slack messages list "#general" --cursor <cursor_from_response>
+
+# Exclusive UTC bounds (date, RFC3339, or Slack timestamp)
+slack messages list "#general" --since 2026-01-01 --until 2026-02-01
+slack messages list "#general" --since 2026-01-01T09:30:00-05:00
+slack messages list "#general" --since 1767225600.000001
+
+# Fetch every page and optionally resolve authors and mentions
+slack messages list "#general" --all --resolve-users
 ```
+
+`--since` and `--until` are exclusive UTC bounds. When a duration-style
+`--limit` and `--since` are both present, the later oldest bound wins.
+Without `--all`, `--limit` keeps its existing page-size behavior and bounds
+are sent with any cursor. `--all` conflicts with `--cursor`, fetches pages of
+200 in Slack response order, and ignores a numeric `--limit`; activity
+messages are still filtered unless `--include-activity` is set.
 
 ## Get a single message
 
@@ -107,6 +122,12 @@ slack messages search "decision" --threads-only
 
 # Pagination
 slack messages search "query" --count 50 --page 2
+
+# Sort by relevance, oldest score first
+slack messages search "query" --sort score --sort-dir asc
+
+# Defaults are newest timestamp first
+slack messages search "query" --sort timestamp --sort-dir desc
 ```
 
 ## Output
@@ -120,13 +141,66 @@ slack --plain messages search "hello"
 
 ## Resolving user IDs in output
 
-Message JSON includes `user` as a Slack user ID (e.g. `U090BKEQXMH`). Resolve it
-to a display name with the CLI:
+List, thread, and search can resolve message authors and user mentions:
 
 ```bash
-slack users info U090BKEQXMH               # full user record (JSON)
-slack --plain users info U090BKEQXMH       # TSV
+slack messages list "#general" --resolve-users
+slack messages thread C1234567890 1234567890.123456 --resolve-users
+slack messages search "review" --resolve-users
 ```
 
-Note: with browser tokens, `real_name` may be empty — prefer the profile's
-`display_name`, falling back to `real_name`.
+For each nonempty invocation, `--resolve-users` traverses the complete
+paginated `users.list` directory exactly once, not once per message. It prefers
+a nonempty username, then the user's display name, and finally the ID. Known
+`<@U…>` and `<@U…|label>` mentions become `@name`; unknown mention tokens and
+unrelated mrkdwn remain unchanged. A directory API error fails the command.
+
+Resolved JSON preserves the original `user` ID and adds `user_name` (`null`
+when the message has no user, with the ID as fallback for an unknown user).
+Without the flag, JSON is unchanged. Plain output always has four TSV columns
+(timestamp, author, channel, text); its author column changes from ID to name
+only when `--resolve-users` is explicitly requested.
+
+## Advanced sending
+
+```bash
+# Broadcast requires a thread parent
+slack messages send "#general" "Reply" --thread-ts 1234567890.123456 --broadcast
+
+# A nonempty Block Kit JSON array, with or without fallback text
+slack messages send "#general" "Fallback" --blocks blocks.json
+cat blocks.json | slack messages send "#general" --blocks -
+
+# Schedule using local natural time, Unix time, RFC3339, or a date form
+slack messages send "#general" "Report" --schedule "tomorrow 9am"
+```
+
+Markdown conversion applies only to fallback text, never strings inside
+blocks. `--blocks -` owns stdin and conflicts with `--stdin`. Scheduling allows
+`--thread-ts`, `--format`, and `--blocks`, but conflicts with `--mark-read` and
+`--broadcast`; it must be future and at most 120 days away. Natural expressions
+use the machine's local timezone. Scheduled sends never call the immediate
+post, mark-read, or permalink endpoints.
+
+## Mutate messages and manage scheduled messages
+
+```bash
+slack messages edit "#general:1234567890.123456" "Updated **text**"
+slack messages delete "https://workspace.slack.com/archives/C123456789/p1234567890123456"
+slack messages permalink "#general:1234567890.123456"
+slack messages mark "#general" 1234567890.123456
+slack messages scheduled list
+slack messages scheduled delete "#general" Q123456789
+```
+
+Edit, delete, and permalink accept `channel:timestamp` or a locally parsed
+Slack permalink; URLs are never fetched. Explicit permalink errors fail the
+command. Slack enforces message ownership, scheduling limits, and permissions,
+and delete does not prompt.
+
+Immediate send JSON has a top-level `permalink`; get JSON populates the
+message's `permalink`. If best-effort enrichment fails, they warn on stderr and
+emit `null` without failing the successful operation. Plain send/get output is
+unchanged and does not request enrichment. Scheduled send JSON always has
+`permalink: null`; plain prints only its scheduled ID. Scheduled list plain
+output is `id<TAB>channel_id<TAB>post_at<TAB>text`.

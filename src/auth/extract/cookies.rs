@@ -189,6 +189,47 @@ mod tests {
     }
 
     #[test]
+    fn copies_database_and_sidecars_then_removes_scratch_directory() {
+        let source_dir = tempdir().unwrap();
+        let db = source_dir.path().join("Cookies Fixture");
+        fs::write(&db, b"sqlite fixture bytes").unwrap();
+        fs::write(source_dir.path().join("Cookies Fixture-wal"), b"wal").unwrap();
+        fs::write(source_dir.path().join("Cookies Fixture-shm"), b"shm").unwrap();
+
+        let guard = copy_db_to_temp(&db).unwrap();
+        let scratch = guard.dir.clone();
+        assert_eq!(fs::read(&guard.db).unwrap(), b"sqlite fixture bytes");
+        assert_eq!(
+            fs::read(scratch.join("Cookies Fixture-wal")).unwrap(),
+            b"wal"
+        );
+        assert_eq!(
+            fs::read(scratch.join("Cookies Fixture-shm")).unwrap(),
+            b"shm"
+        );
+
+        drop(guard);
+        assert!(!scratch.exists());
+    }
+
+    #[test]
+    fn copy_rejects_path_without_a_file_name() {
+        let err = copy_db_to_temp(Path::new("/")).err().unwrap();
+        assert!(err.to_string().contains("invalid cookies database path"));
+    }
+
+    #[test]
+    fn classifies_only_busy_and_locked_sqlite_failures() {
+        let sqlite_error =
+            |code| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
+
+        assert!(is_locked(&sqlite_error(rusqlite::ffi::SQLITE_BUSY)));
+        assert!(is_locked(&sqlite_error(rusqlite::ffi::SQLITE_LOCKED)));
+        assert!(!is_locked(&sqlite_error(rusqlite::ffi::SQLITE_READONLY)));
+        assert!(!is_locked(&rusqlite::Error::InvalidQuery));
+    }
+
+    #[test]
     fn query_returns_encrypted_bytes_for_matching_row() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("Cookies");
@@ -220,6 +261,38 @@ mod tests {
 
         let got = query_encrypted_value(&db).expect("query ok");
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn locked_database_is_read_from_a_temporary_copy() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("Cookies");
+        let payload: &[u8] = b"v10locked-fixture";
+        make_cookies_db(&db, &[("app.slack.com", "d", payload)]);
+
+        let writer = Connection::open(&db).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let got = read_encrypted_d_value(&db).expect("copy bypasses exclusive lock");
+        assert_eq!(got.as_deref(), Some(payload));
+        writer.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn unreadable_database_errors_are_mapped() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing-cookies-db");
+        let err = read_slack_d_cookie(&missing, &[]).unwrap_err();
+        assert!(err.to_string().contains("failed to read cookies database"));
+    }
+
+    #[test]
+    fn matching_cookie_without_keys_has_a_specific_error() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("Cookies");
+        make_cookies_db(&db, &[("app.slack.com", "d", b"v10ciphertext")]);
+
+        let err = read_slack_d_cookie(&db, &[]).unwrap_err();
+        assert!(err.to_string().contains("no Safe Storage keys"));
     }
 
     #[test]

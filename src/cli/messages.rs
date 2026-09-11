@@ -14,6 +14,9 @@ use crate::models::Message;
 use crate::output::{write_json, write_messages_plain, MessagePlain, OutputMode};
 use crate::utils::{parse_time_limit, TimeLimit};
 
+mod read_ops;
+mod write_ops;
+
 /// Message operations commands
 #[derive(Args, Debug)]
 pub struct MessagesCmd {
@@ -38,8 +41,24 @@ pub enum MessagesCommands {
         include_activity: bool,
 
         /// Pagination cursor for next page
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all")]
         cursor: Option<String>,
+
+        /// Read messages newer than this exclusive UTC bound
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Read messages older than this exclusive UTC bound
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Fetch all pages (the numeric --limit is ignored)
+        #[arg(long)]
+        all: bool,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Show thread replies
@@ -61,14 +80,18 @@ pub enum MessagesCommands {
         /// Pagination cursor for next page
         #[arg(long)]
         cursor: Option<String>,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Send a message
     Send {
-        /// Channel name or ID
+        /// Channel name, channel ID, @user, or user ID
         channel: String,
 
-        /// Message text (optional if using --stdin)
+        /// Message text (optional if using --stdin or --blocks)
         text: Option<String>,
 
         /// Read message from stdin
@@ -88,6 +111,55 @@ pub enum MessagesCommands {
         /// Mark channel as read after sending (sets read marker to the sent message)
         #[arg(long)]
         mark_read: bool,
+
+        /// Broadcast a thread reply to the channel
+        #[arg(long)]
+        broadcast: bool,
+
+        /// Read a Block Kit JSON array from a file, or from stdin with `-`
+        #[arg(long, value_name = "FILE.JSON|-", conflicts_with_all = ["stdin"])]
+        blocks: Option<String>,
+
+        /// Schedule delivery using a Unix timestamp, RFC3339, or natural expression
+        #[arg(long, value_name = "WHEN")]
+        schedule: Option<String>,
+    },
+
+    /// Edit an existing message
+    Edit {
+        /// Message identifier: permalink URL or "channel:timestamp" format
+        message: String,
+        /// Replacement message text
+        text: String,
+        /// Replacement text format
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: MessageFormat,
+    },
+
+    /// Delete an existing message
+    Delete {
+        /// Message identifier: permalink URL or "channel:timestamp" format
+        message: String,
+    },
+
+    /// Get a permalink for an existing message
+    Permalink {
+        /// Message identifier: permalink URL or "channel:timestamp" format
+        message: String,
+    },
+
+    /// Mark a channel read through a timestamp
+    Mark {
+        /// Channel name or ID
+        channel: String,
+        /// Message timestamp
+        ts: String,
+    },
+
+    /// Manage scheduled messages
+    Scheduled {
+        #[command(subcommand)]
+        command: ScheduledCommands,
     },
 
     /// Search messages
@@ -130,6 +202,18 @@ pub enum MessagesCommands {
         /// Page number (1-indexed)
         #[arg(long, default_value = "1")]
         page: u32,
+
+        /// Result ordering field
+        #[arg(long, value_enum, default_value = "timestamp")]
+        sort: SearchSort,
+
+        /// Result ordering direction
+        #[arg(long, value_enum, default_value = "desc")]
+        sort_dir: SearchSortDirection,
+
+        /// Resolve author IDs and user mentions with one paginated user-directory load
+        #[arg(long)]
+        resolve_users: bool,
     },
 
     /// Get a single message by URL or channel:timestamp
@@ -137,6 +221,58 @@ pub enum MessagesCommands {
         /// Message identifier: permalink URL or "channel:timestamp" format
         message: String,
     },
+}
+
+/// Scheduled-message subcommands.
+#[derive(Subcommand, Debug)]
+pub enum ScheduledCommands {
+    /// List all scheduled messages
+    List,
+    /// Delete a scheduled message
+    Delete {
+        /// Channel name or ID
+        channel: String,
+        /// Scheduled message ID
+        scheduled_message_id: String,
+    },
+}
+
+/// Search result ordering fields.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum SearchSort {
+    /// Order by Slack relevance score.
+    Score,
+    /// Order by message timestamp.
+    #[default]
+    Timestamp,
+}
+
+impl SearchSort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Score => "score",
+            Self::Timestamp => "timestamp",
+        }
+    }
+}
+
+/// Search result ordering directions.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum SearchSortDirection {
+    /// Oldest or lowest-score results first.
+    Asc,
+    /// Newest or highest-score results first.
+    #[default]
+    Desc,
+}
+
+impl SearchSortDirection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
 }
 
 /// Message format options
@@ -168,16 +304,21 @@ pub async fn run(
             limit,
             include_activity,
             cursor,
+            since,
+            until,
+            all,
+            resolve_users,
         } => {
-            list_messages(
-                &client,
-                channel,
+            let options = ListOptions {
                 limit,
-                *include_activity,
-                cursor.as_deref(),
-                output_mode,
-            )
-            .await?;
+                include_activity: *include_activity,
+                cursor: cursor.as_deref(),
+                since: since.as_deref(),
+                until: until.as_deref(),
+                all: *all,
+                resolve_users: *resolve_users,
+            };
+            list_messages(&client, channel, options, output_mode).await?;
         }
 
         MessagesCommands::Thread {
@@ -186,17 +327,15 @@ pub async fn run(
             limit,
             include_activity,
             cursor,
+            resolve_users,
         } => {
-            thread_replies(
-                &client,
-                channel,
-                thread_ts,
+            let options = ThreadOptions {
                 limit,
-                *include_activity,
-                cursor.as_deref(),
-                output_mode,
-            )
-            .await?;
+                include_activity: *include_activity,
+                cursor: cursor.as_deref(),
+                resolve_users: *resolve_users,
+            };
+            thread_replies(&client, channel, thread_ts, options, output_mode).await?;
         }
 
         MessagesCommands::Send {
@@ -206,19 +345,59 @@ pub async fn run(
             thread_ts,
             format,
             mark_read,
+            broadcast,
+            blocks,
+            schedule,
         } => {
-            send_message(
-                &client,
-                channel,
-                text.clone(),
-                *stdin,
-                thread_ts.as_deref(),
-                *format,
-                *mark_read,
-                output_mode,
-            )
-            .await?;
+            let options = SendOptions {
+                from_stdin: *stdin,
+                thread_ts: thread_ts.as_deref(),
+                format: *format,
+                mark_read: *mark_read,
+                broadcast: *broadcast,
+                blocks: blocks.as_deref(),
+                schedule: schedule.as_deref(),
+            };
+            send_message(&client, channel, text.clone(), options, output_mode).await?;
         }
+
+        MessagesCommands::Edit {
+            message,
+            text,
+            format,
+        } => {
+            write_ops::edit_message(&client, message, text, *format, output_mode).await?;
+        }
+
+        MessagesCommands::Delete { message } => {
+            write_ops::delete_message(&client, message, output_mode).await?;
+        }
+
+        MessagesCommands::Permalink { message } => {
+            write_ops::permalink_message(&client, message, output_mode).await?;
+        }
+
+        MessagesCommands::Mark { channel, ts } => {
+            write_ops::mark_message(&client, channel, ts, output_mode).await?;
+        }
+
+        MessagesCommands::Scheduled { command } => match command {
+            ScheduledCommands::List => {
+                write_ops::list_scheduled_messages(&client, output_mode).await?;
+            }
+            ScheduledCommands::Delete {
+                channel,
+                scheduled_message_id,
+            } => {
+                write_ops::delete_scheduled_message(
+                    &client,
+                    channel,
+                    scheduled_message_id,
+                    output_mode,
+                )
+                .await?;
+            }
+        },
 
         MessagesCommands::Search {
             query,
@@ -231,6 +410,9 @@ pub async fn run(
             threads_only,
             count,
             page,
+            sort,
+            sort_dir,
+            resolve_users,
         } => {
             let query_params = SearchQueryParams {
                 query,
@@ -246,6 +428,9 @@ pub async fn run(
                 query_params,
                 count: *count,
                 page: *page,
+                sort: *sort,
+                sort_dir: *sort_dir,
+                resolve_users: *resolve_users,
             };
             search_messages(&client, search_params, output_mode).await?;
         }
@@ -258,194 +443,291 @@ pub async fn run(
     Ok(())
 }
 
-/// List messages in a channel
+/// Options for a channel history read.
+struct ListOptions<'a> {
+    limit: &'a str,
+    include_activity: bool,
+    cursor: Option<&'a str>,
+    since: Option<&'a str>,
+    until: Option<&'a str>,
+    all: bool,
+    resolve_users: bool,
+}
+
+/// List messages in a channel.
 async fn list_messages(
     client: &SlackClient,
     channel: &str,
-    limit_str: &str,
-    include_activity: bool,
-    cursor: Option<&str>,
+    options: ListOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // Resolve channel name to ID
+    let time_limit = parse_time_limit(options.limit)?;
+    let (oldest, latest) = read_ops::list_bounds(&time_limit, options.since, options.until)?;
     let channel_id = client.resolve_channel(channel).await?;
 
-    // Parse the limit
-    let time_limit = parse_time_limit(limit_str)?;
-
-    let mut params = ConversationsHistoryParams::new(&channel_id);
-
-    match &time_limit {
-        TimeLimit::Count(count) => {
-            params = params.with_limit(*count);
-        }
-        TimeLimit::Timestamp(ts) => {
-            params = params.with_oldest(ts);
-            // When using timestamp, get up to 100 messages per page
-            params = params.with_limit(100);
-        }
-    }
-
-    if let Some(c) = cursor {
-        params = params.with_cursor(c);
-    }
-
-    let response = client.conversations_history(params).await?;
-
-    // Filter out activity messages if not requested
-    let messages: Vec<Message> = if include_activity {
-        response.messages
+    let (messages, has_more, response_metadata) = if options.all {
+        let messages = client
+            .conversations_history_all(&channel_id, oldest.as_deref(), latest.as_deref())
+            .await?;
+        (messages, false, None)
     } else {
-        response
-            .messages
-            .into_iter()
-            .filter(|m| !is_activity_message(m))
-            .collect()
+        let mut params = ConversationsHistoryParams::new(&channel_id);
+        params = match &time_limit {
+            TimeLimit::Count(count) => params.with_limit(*count),
+            TimeLimit::Timestamp(_) => params.with_limit(100),
+        };
+        if let Some(oldest) = &oldest {
+            params = params.with_oldest(oldest);
+        }
+        if let Some(latest) = &latest {
+            params = params.with_latest(latest);
+        }
+        if let Some(cursor) = options.cursor {
+            params = params.with_cursor(cursor);
+        }
+
+        let response = client.conversations_history(params).await?;
+        (
+            response.messages,
+            response.has_more,
+            response.response_metadata,
+        )
     };
 
+    let messages = filter_activity(messages, options.include_activity);
+    let directory = load_user_directory(client, options.resolve_users, messages.is_empty()).await?;
     output_messages(
         &messages,
         &channel_id,
         output_mode,
-        response.has_more,
-        response.response_metadata,
-    )?;
-
-    Ok(())
+        has_more,
+        response_metadata,
+        directory.as_ref(),
+    )
 }
 
-/// Show thread replies
+/// Options for reading one page of thread replies.
+struct ThreadOptions<'a> {
+    limit: &'a str,
+    include_activity: bool,
+    cursor: Option<&'a str>,
+    resolve_users: bool,
+}
+
+/// Show thread replies.
 async fn thread_replies(
     client: &SlackClient,
     channel: &str,
     thread_ts: &str,
-    limit_str: &str,
-    include_activity: bool,
-    cursor: Option<&str>,
+    options: ThreadOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let time_limit = parse_time_limit(options.limit)?;
     let channel_id = client.resolve_channel(channel).await?;
-    let time_limit = parse_time_limit(limit_str)?;
-
     let mut params = ConversationsRepliesParams::new(&channel_id, thread_ts);
 
-    match &time_limit {
-        TimeLimit::Count(count) => {
-            params = params.with_limit(*count);
-        }
-        TimeLimit::Timestamp(_ts) => {
-            // Note: conversations.replies doesn't support oldest/latest, so we use limit
-            params = params.with_limit(100);
-        }
-    }
+    params = match &time_limit {
+        TimeLimit::Count(count) => params.with_limit(*count),
+        // conversations.replies does not support duration limits; preserve the
+        // existing page-size behavior.
+        TimeLimit::Timestamp(_) => params.with_limit(100),
+    };
 
-    if let Some(c) = cursor {
-        params = params.with_cursor(c);
+    if let Some(cursor) = options.cursor {
+        params = params.with_cursor(cursor);
     }
 
     let response = client.conversations_replies(params).await?;
-
-    let messages: Vec<Message> = if include_activity {
-        response.messages
-    } else {
-        response
-            .messages
-            .into_iter()
-            .filter(|m| !is_activity_message(m))
-            .collect()
-    };
-
+    let messages = filter_activity(response.messages, options.include_activity);
+    let directory = load_user_directory(client, options.resolve_users, messages.is_empty()).await?;
     output_messages(
         &messages,
         &channel_id,
         output_mode,
         response.has_more,
         response.response_metadata,
-    )?;
-
-    Ok(())
+        directory.as_ref(),
+    )
 }
 
-/// Send a message
-///
-/// If `mark_read` is true, marks the channel as read after sending.
-#[allow(clippy::too_many_arguments)]
+fn filter_activity(messages: Vec<Message>, include_activity: bool) -> Vec<Message> {
+    if include_activity {
+        messages
+    } else {
+        messages
+            .into_iter()
+            .filter(|message| !is_activity_message(message))
+            .collect()
+    }
+}
+
+async fn load_user_directory(
+    client: &SlackClient,
+    resolve_users: bool,
+    messages_empty: bool,
+) -> Result<Option<read_ops::UserDirectory>> {
+    if !resolve_users || messages_empty {
+        return Ok(None);
+    }
+    Ok(Some(read_ops::UserDirectory::from_users(
+        client.users_list_all().await?,
+    )))
+}
+
+/// Options for sending immediately or scheduling a message.
+struct SendOptions<'a> {
+    from_stdin: bool,
+    thread_ts: Option<&'a str>,
+    format: MessageFormat,
+    mark_read: bool,
+    broadcast: bool,
+    blocks: Option<&'a str>,
+    schedule: Option<&'a str>,
+}
+
+/// Send a message immediately or schedule it for later.
 async fn send_message(
     client: &SlackClient,
     channel: &str,
     text: Option<String>,
-    from_stdin: bool,
-    thread_ts: Option<&str>,
-    format: MessageFormat,
-    mark_read: bool,
+    options: SendOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let channel_id = client.resolve_channel(channel).await?;
+    if options.broadcast && options.thread_ts.is_none() {
+        return Err(SlackError::Usage(
+            "--broadcast requires --thread-ts".to_string(),
+        ));
+    }
+    if options.schedule.is_some() && options.mark_read {
+        return Err(SlackError::Usage(
+            "--schedule cannot be used with --mark-read".to_string(),
+        ));
+    }
+    if options.schedule.is_some() && options.broadcast {
+        return Err(SlackError::Usage(
+            "--schedule cannot be used with --broadcast".to_string(),
+        ));
+    }
+    if options.from_stdin && options.blocks == Some("-") {
+        return Err(SlackError::Usage(
+            "--blocks - cannot be used with --stdin".to_string(),
+        ));
+    }
 
-    // Get message text
-    let message_text = if from_stdin {
-        read_stdin().await?
+    let message_text = if options.from_stdin {
+        Some(read_stdin().await?)
     } else {
-        text.ok_or_else(|| {
-            SlackError::Usage("Message text required. Provide TEXT or use --stdin".to_string())
-        })?
+        text
+    };
+    let blocks = match options.blocks {
+        Some(path) => Some(read_blocks(path).await?),
+        None => None,
     };
 
-    if message_text.trim().is_empty() {
+    if message_text.is_none() && blocks.is_none() {
+        return Err(SlackError::Usage(
+            "Message text or --blocks is required. Provide TEXT or use --stdin".to_string(),
+        ));
+    }
+    if message_text
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(false)
+        && blocks.is_none()
+    {
         return Err(SlackError::Usage(
             "Message text cannot be empty".to_string(),
         ));
     }
 
-    // Convert the message text according to the requested format.
-    let outgoing_text = match format {
-        // Standard Markdown -> Slack mrkdwn (**bold** -> *bold*,
-        // [t](url) -> <url|t>, bullets -> •, etc.). Slack parses the `text`
-        // field as mrkdwn by default, so without this common Markdown renders
-        // as literal characters. See issue #1.
+    let outgoing_text = message_text.map(|message_text| match options.format {
         MessageFormat::Markdown => crate::utils::markdown_to_mrkdwn(&message_text),
-        // Plain: send as-is and disable mrkdwn parsing below.
-        MessageFormat::Plain => message_text.clone(),
-    };
+        MessageFormat::Plain => message_text,
+    });
 
-    let mut params = ChatPostMessageParams::new(&channel_id).with_text(&outgoing_text);
-
-    if let Some(ts) = thread_ts {
-        params = params.in_thread(ts);
+    if let Some(when) = options.schedule {
+        let post_at = crate::cli::reminders::parse_when(when)?;
+        let schedule_options = write_ops::ScheduleOptions {
+            text: outgoing_text.as_deref(),
+            thread_ts: options.thread_ts,
+            format: options.format,
+            blocks,
+        };
+        return write_ops::schedule_message(
+            client,
+            channel,
+            post_at,
+            schedule_options,
+            output_mode,
+        )
+        .await;
     }
 
-    // Set markdown based on format
-    match format {
-        MessageFormat::Markdown => {
-            // mrkdwn parsing is enabled by default in Slack; the text has
-            // already been converted from Markdown above.
-        }
-        MessageFormat::Plain => {
-            params.mrkdwn = Some(false);
-        }
+    let channel_id = client.resolve_channel(channel).await?;
+    let mut params = ChatPostMessageParams::new(&channel_id);
+    if let Some(text) = &outgoing_text {
+        params = params.with_text(text);
+    }
+    if let Some(ts) = options.thread_ts {
+        params = params.in_thread(ts);
+    }
+    if options.broadcast {
+        params = params.reply_broadcast(true);
+    }
+    if let Some(blocks) = blocks {
+        params = params.with_blocks(blocks);
+    }
+    if matches!(options.format, MessageFormat::Plain) {
+        params.mrkdwn = Some(false);
     }
 
     let response = client.chat_post_message(params).await?;
-
-    // Mark channel as read if requested
-    if mark_read {
+    if options.mark_read {
         let mark_params = ConversationsMarkParams::new(&channel_id, &response.ts);
         client.conversations_mark(mark_params).await?;
     }
 
     if output_mode == OutputMode::Plain {
-        // Just output the timestamp
         println!("{}", response.ts);
     } else {
+        let permalink = write_ops::best_effort_permalink(
+            client,
+            &response.channel,
+            &response.ts,
+            response.message.permalink.as_deref(),
+        )
+        .await;
         write_json(&serde_json::json!({
             "ok": true,
             "channel": response.channel,
             "ts": response.ts,
             "message": response.message,
+            "permalink": permalink,
         }))?;
     }
 
     Ok(())
+}
+
+async fn read_blocks(path: &str) -> Result<serde_json::Value> {
+    let content = if path == "-" {
+        read_stdin().await?
+    } else {
+        std::fs::read_to_string(path).map_err(|error| {
+            SlackError::Usage(format!("Could not read blocks JSON '{}': {}", path, error))
+        })?
+    };
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|error| SlackError::Usage(format!("Invalid blocks JSON: {}", error)))?;
+    match value.as_array() {
+        Some(items) if !items.is_empty() => Ok(value),
+        Some(_) => Err(SlackError::Usage(
+            "Blocks JSON array cannot be empty".to_string(),
+        )),
+        None => Err(SlackError::Usage(
+            "Blocks JSON must be a non-empty array".to_string(),
+        )),
+    }
 }
 
 /// Read message content from stdin
@@ -525,6 +807,9 @@ struct SearchParams<'a> {
     query_params: SearchQueryParams<'a>,
     count: u32,
     page: u32,
+    sort: SearchSort,
+    sort_dir: SearchSortDirection,
+    resolve_users: bool,
 }
 
 /// Search messages
@@ -544,32 +829,22 @@ async fn search_messages(
     let api_params = SearchMessagesParams::new(&full_query)
         .with_count(params.count)
         .with_page(params.page)
-        .with_sort("timestamp", "desc");
+        .with_sort(params.sort.as_str(), params.sort_dir.as_str());
 
     let response = client.search_messages(api_params).await?;
-
-    if output_mode == OutputMode::Plain {
-        let plain_messages: Vec<MessagePlain> = response
-            .messages
-            .matches
-            .iter()
-            .map(|m| MessagePlain {
-                timestamp: &m.ts,
-                user_id: m.user.as_deref().unwrap_or(""),
-                channel: m.channel.as_ref().map(|c| c.id.as_str()).unwrap_or(""),
-                text: m.text.as_deref().unwrap_or(""),
-            })
-            .collect();
-        write_messages_plain(&plain_messages)?;
-    } else {
-        write_json(&serde_json::json!({
-            "total": response.messages.total,
-            "pagination": response.messages.pagination,
-            "messages": response.messages.matches,
-        }))?;
-    }
-
-    Ok(())
+    let directory = load_user_directory(
+        client,
+        params.resolve_users,
+        response.messages.matches.is_empty(),
+    )
+    .await?;
+    output_search_messages(
+        &response.messages.matches,
+        response.messages.total,
+        response.messages.pagination,
+        output_mode,
+        directory.as_ref(),
+    )
 }
 
 /// Get a single message by URL or channel:timestamp
@@ -592,7 +867,7 @@ async fn get_message(
 
     let response = client.conversations_history(params).await?;
 
-    let message = response
+    let mut message = response
         .messages
         .into_iter()
         .next()
@@ -600,6 +875,16 @@ async fn get_message(
             error: "message_not_found".to_string(),
             detail: Some(format!("Message {} not found in channel", ts)),
         })?;
+
+    if output_mode != OutputMode::Plain {
+        message.permalink = write_ops::best_effort_permalink(
+            client,
+            &resolved_channel,
+            &message.ts,
+            message.permalink.as_deref(),
+        )
+        .await;
+    }
 
     if output_mode == OutputMode::Plain {
         println!("ts\t{}", message.ts);
@@ -623,29 +908,38 @@ async fn get_message(
 }
 
 /// Parse a message identifier (URL or channel:timestamp format)
-fn parse_message_identifier(identifier: &str) -> Result<(String, String)> {
-    // Check if it's a Slack permalink URL
+pub(super) fn parse_message_identifier(identifier: &str) -> Result<(String, String)> {
     if identifier.starts_with("https://") || identifier.starts_with("http://") {
         return parse_slack_permalink(identifier);
     }
 
-    // Check for channel:timestamp format
     if let Some(pos) = identifier.rfind(':') {
         let channel = &identifier[..pos];
         let ts = &identifier[pos + 1..];
-
-        if channel.is_empty() || ts.is_empty() {
-            return Err(SlackError::Usage(
-                "Invalid format. Use 'channel:timestamp' or Slack permalink URL".to_string(),
-            ));
+        if !channel.is_empty() && valid_slack_timestamp(ts) {
+            return Ok((channel.to_string(), ts.to_string()));
         }
-
-        return Ok((channel.to_string(), ts.to_string()));
+        return Err(SlackError::Usage(
+            "Invalid format. Use 'channel:timestamp' or Slack permalink URL".to_string(),
+        ));
     }
 
     Err(SlackError::Usage(
         "Invalid message identifier. Use 'channel:timestamp' or Slack permalink URL".to_string(),
     ))
+}
+
+fn valid_slack_timestamp(ts: &str) -> bool {
+    let mut parts = ts.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(seconds), Some(micros), None)
+            if !seconds.is_empty()
+                && !micros.is_empty()
+                && seconds.bytes().all(|byte| byte.is_ascii_digit())
+                && micros.len() <= 6
+                && micros.bytes().all(|byte| byte.is_ascii_digit())
+    )
 }
 
 /// Parse a Slack permalink URL to extract channel and timestamp
@@ -665,7 +959,7 @@ fn parse_slack_permalink(url: &str) -> Result<(String, String)> {
         .unwrap_or_default();
 
     // Expected format: /archives/{channel_id}/p{timestamp}
-    if path_segments.len() < 3 || path_segments[0] != "archives" {
+    if path_segments.len() != 3 || path_segments[0] != "archives" || path_segments[1].is_empty() {
         return Err(SlackError::Usage(
             "Invalid Slack permalink format. Expected: https://workspace.slack.com/archives/CHANNEL/pTIMESTAMP".to_string(),
         ));
@@ -673,34 +967,21 @@ fn parse_slack_permalink(url: &str) -> Result<(String, String)> {
 
     let channel_id = path_segments[1].to_string();
     let p_timestamp = path_segments[2];
-
-    // The timestamp in URLs is formatted as p{seconds}{microseconds} without the dot
-    // We need to convert p1234567890123456 to 1234567890.123456
-    if !p_timestamp.starts_with('p') || p_timestamp.len() < 11 {
+    let ts_digits = p_timestamp
+        .strip_prefix('p')
+        .ok_or_else(|| SlackError::Usage("Invalid timestamp in permalink".to_string()))?;
+    if !(10..=16).contains(&ts_digits.len()) || !ts_digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
         return Err(SlackError::Usage(
             "Invalid timestamp in permalink".to_string(),
         ));
     }
 
-    let ts_digits = &p_timestamp[1..]; // Remove 'p' prefix
-
-    // Split into seconds (10 digits) and microseconds (remaining)
-    if ts_digits.len() >= 10 {
-        let seconds = &ts_digits[..10];
-        let micros = if ts_digits.len() > 10 {
-            &ts_digits[10..]
-        } else {
-            "000000"
-        };
-        // Pad micros to 6 digits
-        let micros_padded = format!("{:0<6}", micros);
-        let ts = format!("{}.{}", seconds, micros_padded);
-        return Ok((channel_id, ts));
-    }
-
-    Err(SlackError::Usage(
-        "Invalid timestamp format in permalink".to_string(),
-    ))
+    // ASCII validation above makes these byte offsets safe.
+    let seconds = &ts_digits[..10];
+    let micros = &ts_digits[10..];
+    let micros_padded = format!("{:0<6}", micros);
+    Ok((channel_id, format!("{}.{}", seconds, micros_padded)))
 }
 
 /// Check if a message is an activity message (join/leave/topic change, etc.)
@@ -737,27 +1018,107 @@ fn output_messages(
     output_mode: OutputMode,
     has_more: bool,
     response_metadata: Option<crate::api::ResponseMetadata>,
+    directory: Option<&read_ops::UserDirectory>,
 ) -> Result<()> {
-    if output_mode == OutputMode::Plain {
+    if let Some(directory) = directory {
+        let resolved = directory.resolve_texts(messages);
+        if output_mode == OutputMode::Plain {
+            write_plain_messages(&resolved, channel_id, directory)
+        } else {
+            write_json(&serde_json::json!({
+                "messages": read_ops::resolved_views(&resolved, directory),
+                "has_more": has_more,
+                "response_metadata": response_metadata,
+            }))
+        }
+    } else if output_mode == OutputMode::Plain {
         let plain_messages: Vec<MessagePlain> = messages
             .iter()
-            .map(|m| MessagePlain {
-                timestamp: &m.ts,
-                user_id: m.user.as_deref().unwrap_or(""),
+            .map(|message| MessagePlain {
+                timestamp: &message.ts,
+                user_id: message.user.as_deref().unwrap_or(""),
                 channel: channel_id,
-                text: m.text.as_deref().unwrap_or(""),
+                text: message.text.as_deref().unwrap_or(""),
             })
             .collect();
-        write_messages_plain(&plain_messages)?;
+        write_messages_plain(&plain_messages)
     } else {
         write_json(&serde_json::json!({
             "messages": messages,
             "has_more": has_more,
             "response_metadata": response_metadata,
-        }))?;
+        }))
     }
+}
 
-    Ok(())
+fn write_plain_messages(
+    messages: &[Message],
+    default_channel: &str,
+    directory: &read_ops::UserDirectory,
+) -> Result<()> {
+    // The shared TSV writer handles tabs and line feeds. Normalize carriage
+    // returns here as well so resolved output remains exactly four columns.
+    let texts: Vec<String> = messages
+        .iter()
+        .map(|message| message.text.as_deref().unwrap_or("").replace('\r', "\\r"))
+        .collect();
+    let plain_messages: Vec<MessagePlain> = messages
+        .iter()
+        .zip(&texts)
+        .map(|(message, text)| MessagePlain {
+            timestamp: &message.ts,
+            user_id: directory.name_for(message.user.as_deref()).unwrap_or(""),
+            channel: message
+                .channel
+                .as_ref()
+                .map(|channel| channel.id.as_str())
+                .unwrap_or(default_channel),
+            text,
+        })
+        .collect();
+    write_messages_plain(&plain_messages)
+}
+
+fn output_search_messages(
+    messages: &[Message],
+    total: u32,
+    pagination: Option<crate::api::SearchPagination>,
+    output_mode: OutputMode,
+    directory: Option<&read_ops::UserDirectory>,
+) -> Result<()> {
+    if let Some(directory) = directory {
+        let resolved = directory.resolve_texts(messages);
+        if output_mode == OutputMode::Plain {
+            write_plain_messages(&resolved, "", directory)
+        } else {
+            write_json(&serde_json::json!({
+                "total": total,
+                "pagination": pagination,
+                "messages": read_ops::resolved_views(&resolved, directory),
+            }))
+        }
+    } else if output_mode == OutputMode::Plain {
+        let plain_messages: Vec<MessagePlain> = messages
+            .iter()
+            .map(|message| MessagePlain {
+                timestamp: &message.ts,
+                user_id: message.user.as_deref().unwrap_or(""),
+                channel: message
+                    .channel
+                    .as_ref()
+                    .map(|channel| channel.id.as_str())
+                    .unwrap_or(""),
+                text: message.text.as_deref().unwrap_or(""),
+            })
+            .collect();
+        write_messages_plain(&plain_messages)
+    } else {
+        write_json(&serde_json::json!({
+            "total": total,
+            "pagination": pagination,
+            "messages": messages,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -775,18 +1136,68 @@ mod tests {
                 limit,
                 include_activity,
                 cursor,
+                since,
+                until,
+                all,
+                resolve_users,
             } = cmd.command
             {
                 assert_eq!(channel, "general");
                 assert_eq!(limit, "50");
                 assert!(!include_activity);
                 assert!(cursor.is_none());
+                assert!(since.is_none());
+                assert!(until.is_none());
+                assert!(!all);
+                assert!(!resolve_users);
             } else {
                 panic!("Expected List command");
             }
         } else {
             panic!("Expected Messages command");
         }
+    }
+
+    #[test]
+    fn test_parse_messages_list_read_options() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "list",
+            "general",
+            "--since",
+            "2025-01-01",
+            "--until",
+            "2025-02-01",
+            "--all",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::List {
+                since,
+                until,
+                all,
+                resolve_users,
+                ..
+            } = cmd.command
+            {
+                assert_eq!(since.as_deref(), Some("2025-01-01"));
+                assert_eq!(until.as_deref(), Some("2025-02-01"));
+                assert!(all);
+                assert!(resolve_users);
+            } else {
+                panic!("Expected List command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_messages_list_all_conflicts_with_cursor() {
+        assert!(Cli::try_parse_from([
+            "slack", "messages", "list", "general", "--all", "--cursor", "next"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -862,6 +1273,26 @@ mod tests {
             }
         } else {
             panic!("Expected Messages command");
+        }
+    }
+
+    #[test]
+    fn test_parse_messages_thread_resolve_users() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "thread",
+            "general",
+            "1234567890.123456",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::Thread { resolve_users, .. } = cmd.command {
+                assert!(resolve_users);
+            } else {
+                panic!("Expected Thread command");
+            }
         }
     }
 
@@ -984,18 +1415,71 @@ mod tests {
         let cli = Cli::try_parse_from(["slack", "messages", "search", "hello world"]).unwrap();
         if let crate::cli::Commands::Messages(cmd) = cli.command {
             if let MessagesCommands::Search {
-                query, count, page, ..
+                query,
+                count,
+                page,
+                sort,
+                sort_dir,
+                resolve_users,
+                ..
             } = cmd.command
             {
                 assert_eq!(query, "hello world");
                 assert_eq!(count, 20);
                 assert_eq!(page, 1);
+                assert!(matches!(sort, SearchSort::Timestamp));
+                assert!(matches!(sort_dir, SearchSortDirection::Desc));
+                assert!(!resolve_users);
             } else {
                 panic!("Expected Search command");
             }
         } else {
             panic!("Expected Messages command");
         }
+    }
+
+    #[test]
+    fn test_parse_messages_search_sort_and_resolution() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "search",
+            "hello",
+            "--sort",
+            "score",
+            "--sort-dir",
+            "asc",
+            "--resolve-users",
+        ])
+        .unwrap();
+        if let crate::cli::Commands::Messages(cmd) = cli.command {
+            if let MessagesCommands::Search {
+                sort,
+                sort_dir,
+                resolve_users,
+                ..
+            } = cmd.command
+            {
+                assert!(matches!(sort, SearchSort::Score));
+                assert!(matches!(sort_dir, SearchSortDirection::Asc));
+                assert!(resolve_users);
+            } else {
+                panic!("Expected Search command");
+            }
+        }
+        assert!(
+            Cli::try_parse_from(["slack", "messages", "search", "hello", "--sort", "newest"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "slack",
+            "messages",
+            "search",
+            "hello",
+            "--sort-dir",
+            "sideways"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1158,6 +1642,100 @@ mod tests {
     fn test_parse_slack_permalink_invalid() {
         let result = parse_slack_permalink("https://example.com/invalid");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_messages_write_commands_and_send_flags() {
+        let cli = Cli::try_parse_from([
+            "slack",
+            "messages",
+            "send",
+            "C123456789",
+            "fallback",
+            "--thread-ts",
+            "1234567890.123456",
+            "--broadcast",
+            "--blocks",
+            "blocks.json",
+            "--schedule",
+            "in 1h",
+            "--format",
+            "plain",
+        ])
+        .unwrap();
+        match cli.command {
+            crate::cli::Commands::Messages(MessagesCmd {
+                command:
+                    MessagesCommands::Send {
+                        broadcast,
+                        blocks,
+                        schedule,
+                        format,
+                        ..
+                    },
+            }) => {
+                assert!(broadcast);
+                assert_eq!(blocks.as_deref(), Some("blocks.json"));
+                assert_eq!(schedule.as_deref(), Some("in 1h"));
+                assert!(matches!(format, MessageFormat::Plain));
+            }
+            _ => panic!("Expected Send command"),
+        }
+
+        for args in [
+            vec![
+                "slack",
+                "messages",
+                "edit",
+                "C123456789:1234567890.123456",
+                "new",
+            ],
+            vec![
+                "slack",
+                "messages",
+                "delete",
+                "C123456789:1234567890.123456",
+            ],
+            vec![
+                "slack",
+                "messages",
+                "permalink",
+                "C123456789:1234567890.123456",
+            ],
+            vec![
+                "slack",
+                "messages",
+                "mark",
+                "C123456789",
+                "1234567890.123456",
+            ],
+            vec!["slack", "messages", "scheduled", "list"],
+            vec![
+                "slack",
+                "messages",
+                "scheduled",
+                "delete",
+                "C123456789",
+                "Q123",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_parse_message_identifier_rejects_malformed_unicode_timestamp() {
+        for identifier in [
+            "C123456789:１２３.456",
+            "C123456789:1234567890.1234567",
+            "C123456789:1234",
+            "https://workspace.slack.com/archives/C123456789/p1234567890💥",
+        ] {
+            assert!(
+                parse_message_identifier(identifier).is_err(),
+                "{identifier}"
+            );
+        }
     }
 
     #[test]

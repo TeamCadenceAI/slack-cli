@@ -7,8 +7,14 @@
 //! - Response types and API method parameters
 //! - Name resolution helpers
 
+pub mod bookmark_ops;
+pub mod channel_ops;
+pub mod chat_ops;
 mod client;
 pub mod edge;
+pub mod file_ops;
+pub mod identity_ops;
+pub mod pin_emoji_ops;
 mod rate_limiter;
 mod resolve;
 pub mod types;

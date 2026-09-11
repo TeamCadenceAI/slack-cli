@@ -761,13 +761,6 @@ mod tests {
     async fn test_client_request_mock() {
         use crate::api::types::AuthTestResponse;
 
-        // Skip this test unless SLACK_RUN_MOCK_TESTS=1 is set
-        // because mockito requires socket binding which may fail in restricted environments
-        if std::env::var("SLACK_RUN_MOCK_TESTS").unwrap_or_default() != "1" {
-            eprintln!("Skipping test_client_request_mock (set SLACK_RUN_MOCK_TESTS=1 to run)");
-            return;
-        }
-
         use mockito::Server;
 
         let mut server = Server::new_async().await;
@@ -971,20 +964,8 @@ mod tests {
         }
     }
 
-    fn mock_tests_enabled() -> bool {
-        if std::env::var("SLACK_RUN_MOCK_TESTS").unwrap_or_default() != "1" {
-            eprintln!("Skipping mock test (set SLACK_RUN_MOCK_TESTS=1 to run)");
-            false
-        } else {
-            true
-        }
-    }
-
     #[tokio::test]
     async fn test_api_request_get_encodes_query_params() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::{Matcher, Server};
 
         let mut server = Server::new_async().await;
@@ -1016,9 +997,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_post_form_encodes_nested_json_and_skips_null() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::{Matcher, Server};
 
         let mut server = Server::new_async().await;
@@ -1060,9 +1038,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_slack_error_maps_to_api_error() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         let mut server = Server::new_async().await;
@@ -1100,9 +1075,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_http_error_without_ok_field() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         let mut server = Server::new_async().await;
@@ -1132,9 +1104,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_malformed_json_response() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         let mut server = Server::new_async().await;
@@ -1161,9 +1130,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_does_not_follow_redirects() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         // "Attacker" server that must never receive our credentials.
@@ -1206,9 +1172,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_bounded_429_retries() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         let mut server = Server::new_async().await;
@@ -1240,9 +1203,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_browser_token_sends_cookie() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::{Matcher, Server};
 
         let mut server = Server::new_async().await;
@@ -1270,9 +1230,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_full_url_normalized_to_base_url() {
-        if !mock_tests_enabled() {
-            return;
-        }
         use mockito::Server;
 
         // Passing the canonical https://slack.com/api/<method> URL must still
