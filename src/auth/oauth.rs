@@ -422,7 +422,7 @@ fn start_callback_server(
 
     // Accept one request
     if let Some(request) = server.recv_timeout(Duration::from_secs(120))? {
-        let url_str = format!("http://localhost{}", request.url());
+        let url_str = format!("http://localhost{}", request.url()); // aislop-ignore-line ai-slop/hardcoded-url -- callback server is intentionally loopback-only
         let url = match Url::parse(&url_str) {
             Ok(u) => u,
             Err(e) => {
@@ -595,7 +595,7 @@ mod tests {
     fn test_parse_oauth_response_success_bot_token() {
         let body: serde_json::Value = serde_json::json!({
             "ok": true,
-            "access_token": "xoxb-123456789-0123456789-abcdefghijklmnop",
+            "access_token": "xoxb-123456789-0123456789-abcdefghijklmnop", // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth response fixture
             "token_type": "bot",
             "scope": "channels:read,users:read",
             "bot_user_id": "UBOT12345",
@@ -611,6 +611,7 @@ mod tests {
         let token_set = result.unwrap();
         assert_eq!(
             token_set.access_token,
+            // aislop-ignore-next-line security/hardcoded-secret -- synthetic OAuth response fixture
             "xoxb-123456789-0123456789-abcdefghijklmnop"
         );
         assert_eq!(token_set.team_id, "T12345678");
@@ -624,12 +625,12 @@ mod tests {
     fn test_parse_oauth_response_success_user_token() {
         let body: serde_json::Value = serde_json::json!({
             "ok": true,
-            "access_token": "xoxp-123456789-0123456789-0123456789-abcdef",
+            "access_token": "xoxp-123456789-0123456789-0123456789-abcdef", // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth response fixture
             "token_type": "user",
             "scope": "channels:read,chat:write",
             "authed_user": {
                 "id": "U12345678",
-                "access_token": "xoxp-123456789-0123456789-0123456789-abcdef"
+                "access_token": "xoxp-123456789-0123456789-0123456789-abcdef" // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth response fixture
             },
             "team": {
                 "id": "T98765432",
@@ -643,6 +644,7 @@ mod tests {
         let token_set = result.unwrap();
         assert_eq!(
             token_set.access_token,
+            // aislop-ignore-next-line security/hardcoded-secret -- synthetic OAuth response fixture
             "xoxp-123456789-0123456789-0123456789-abcdef"
         );
         assert_eq!(token_set.team_id, "T98765432");
@@ -679,7 +681,7 @@ mod tests {
             "scope": "search:read",
             "authed_user": {
                 "id": "UUSER1234",
-                "access_token": "xoxp-user-token-here-abcdef123"
+                "access_token": "xoxp-user-token-here-abcdef123" // aislop-ignore-line security/hardcoded-secret -- synthetic fallback fixture
             },
             "team": {
                 "id": "TUSER1234",
@@ -691,7 +693,10 @@ mod tests {
 
         assert!(result.is_ok());
         let token_set = result.unwrap();
-        assert_eq!(token_set.access_token, "xoxp-user-token-here-abcdef123");
+        assert_eq!(
+            token_set.access_token,
+            "xoxp-user-token-here-abcdef123" // aislop-ignore-line security/hardcoded-secret -- synthetic fallback fixture
+        );
         assert_eq!(token_set.user_id, "UUSER1234");
         assert_eq!(token_set.token_type, crate::auth::TokenType::UserOAuth);
     }
@@ -701,7 +706,7 @@ mod tests {
         // Test case where neither user_id nor bot_user_id is present
         let body: serde_json::Value = serde_json::json!({
             "ok": true,
-            "access_token": "xoxb-minimal-token-here-1234",
+            "access_token": "xoxb-minimal-token-here-1234", // aislop-ignore-line security/hardcoded-secret -- synthetic fallback fixture
             "token_type": "bot",
             "scope": "",
             "team": {
@@ -751,6 +756,7 @@ mod tests {
     #[test]
     fn exchange_code_posts_form_and_maps_success() {
         use mockito::Matcher;
+        let expected_token = "xoxb-test-access-token";
 
         let mut server = mockito::Server::new();
         let mock = server
@@ -768,13 +774,14 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                serde_json::json!({
                     "ok": true,
-                    "access_token": "xoxb-test-access-token",
+                    "access_token": &expected_token,
                     "scope": "channels:read,chat:write",
                     "bot_user_id": "UBOT",
                     "team": {"id": "TTEAM", "name": "OAuth Team"}
-                }"#,
+                })
+                .to_string(),
             )
             .create();
         let flow = test_flow(format!("{}/oauth.v2.access", server.url()), 9123);
@@ -782,7 +789,7 @@ mod tests {
         let token = flow.exchange_code("oauth-code").unwrap();
 
         mock.assert();
-        assert_eq!(token.access_token, "xoxb-test-access-token");
+        assert_eq!(token.access_token, expected_token);
         assert_eq!(token.team_id, "TTEAM");
         assert_eq!(token.team_name, "OAuth Team");
         assert_eq!(token.user_id, "UBOT");
@@ -916,6 +923,7 @@ mod tests {
 
     fn oauth_success_mock(server: &mut mockito::Server, expected_code: &str) -> mockito::Mock {
         use mockito::Matcher;
+        let expected_token = "xoxp-manual-access-token"; // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth response fixture
 
         server
             .mock("POST", "/oauth.v2.access")
@@ -926,13 +934,14 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                serde_json::json!({
                     "ok": true,
-                    "access_token": "xoxp-manual-access-token",
+                    "access_token": &expected_token,
                     "scope": "users:read",
                     "authed_user": {"id": "UMANUAL"},
                     "team": {"id": "TMANUAL", "name": "Manual Team"}
-                }"#,
+                })
+                .to_string(),
             )
             .create()
     }
@@ -953,7 +962,7 @@ mod tests {
             .unwrap();
 
         mock.assert();
-        assert_eq!(token.access_token, "xoxp-manual-access-token");
+        assert_eq!(token.access_token, "xoxp-manual-access-token"); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth response fixture
         assert!(presented_url.unwrap().contains("state=known-state"));
     }
 

@@ -52,10 +52,6 @@ const XOXD_PREFIX: &str = "xoxd-";
 /// AES block size / derived-key length in bytes.
 const AES_KEY_LEN: usize = 16;
 
-// ---------------------------------------------------------------------------
-// safe_storage_key
-// ---------------------------------------------------------------------------
-
 /// Derive every candidate AES key that might decrypt a profile's cookie values.
 ///
 /// On macOS a `"<App> Safe Storage"` service can contain more than one generic
@@ -179,10 +175,6 @@ fn derive_key(password: &[u8]) -> Vec<u8> {
     key
 }
 
-// ---------------------------------------------------------------------------
-// decrypt_cookie_value
-// ---------------------------------------------------------------------------
-
 /// Decrypt a Chromium `encrypted_value` blob into a Slack `xoxd-…` cookie.
 ///
 /// The `encrypted_value` must start with the `b"v10"` marker. The remaining
@@ -251,10 +243,6 @@ fn finalize_cookie_plaintext(plaintext: Vec<u8>) -> Result<String> {
         "decrypted cookie value does not look like an 'xoxd-' token".into(),
     ))
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

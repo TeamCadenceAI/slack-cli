@@ -478,44 +478,77 @@ mod tests {
         fn seed(&self, key: &str, value: impl Into<String>) {
             self.entries
                 .lock()
-                .unwrap()
+                .expect("memory store entries lock poisoned")
                 .insert(key.to_string(), value.into());
         }
 
         fn value(&self, key: &str) -> Option<String> {
-            self.entries.lock().unwrap().get(key).cloned()
+            self.entries
+                .lock()
+                .expect("memory store entries lock poisoned")
+                .get(key)
+                .cloned()
         }
 
         fn operations(&self) -> Vec<String> {
-            self.operations.lock().unwrap().clone()
+            self.operations
+                .lock()
+                .expect("memory store operations lock poisoned")
+                .clone()
         }
 
         fn fail_get(&self, key: &str) {
-            self.failing_gets.lock().unwrap().insert(key.to_string());
+            self.failing_gets
+                .lock()
+                .expect("memory store failing-gets lock poisoned")
+                .insert(key.to_string());
         }
 
         fn fail_sets(&self) {
-            *self.fail_sets.lock().unwrap() = true;
+            *self
+                .fail_sets
+                .lock()
+                .expect("memory store fail-sets lock poisoned") = true;
         }
     }
 
     impl SecretStore for MemorySecretStore {
         fn get(&self, key: &str) -> Result<Option<String>> {
-            self.operations.lock().unwrap().push(format!("get:{key}"));
-            if self.failing_gets.lock().unwrap().contains(key) {
+            self.operations
+                .lock()
+                .expect("memory store operations lock poisoned")
+                .push(format!("get:{key}"));
+            if self
+                .failing_gets
+                .lock()
+                .expect("memory store failing-gets lock poisoned")
+                .contains(key)
+            {
                 return Err(SlackError::Other(format!("failed get: {key}")));
             }
-            Ok(self.entries.lock().unwrap().get(key).cloned())
+            Ok(self
+                .entries
+                .lock()
+                .expect("memory store entries lock poisoned")
+                .get(key)
+                .cloned())
         }
 
         fn set(&self, key: &str, value: &str) -> Result<()> {
-            self.operations.lock().unwrap().push(format!("set:{key}"));
-            if *self.fail_sets.lock().unwrap() {
+            self.operations
+                .lock()
+                .expect("memory store operations lock poisoned")
+                .push(format!("set:{key}"));
+            if *self
+                .fail_sets
+                .lock()
+                .expect("memory store fail-sets lock poisoned")
+            {
                 return Err(SlackError::Other("failed set".into()));
             }
             self.entries
                 .lock()
-                .unwrap()
+                .expect("memory store entries lock poisoned")
                 .insert(key.to_string(), value.to_string());
             Ok(())
         }
@@ -523,9 +556,12 @@ mod tests {
         fn delete(&self, key: &str) -> Result<()> {
             self.operations
                 .lock()
-                .unwrap()
+                .expect("memory store operations lock poisoned")
                 .push(format!("delete:{key}"));
-            self.entries.lock().unwrap().remove(key);
+            self.entries
+                .lock()
+                .expect("memory store entries lock poisoned")
+                .remove(key);
             Ok(())
         }
     }

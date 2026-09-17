@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_token_type_from_prefix_user() {
         assert_eq!(
-            TokenType::from_prefix("xoxp-123456789-0"),
+            TokenType::from_prefix("xoxp-123456789-0"), // aislop-ignore-line security/hardcoded-secret -- synthetic prefix fixture
             Some(TokenType::UserOAuth)
         );
     }
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_token_type_from_prefix_bot() {
         assert_eq!(
-            TokenType::from_prefix("xoxb-123456789-0"),
+            TokenType::from_prefix("xoxb-123456789-0"), // aislop-ignore-line security/hardcoded-secret -- synthetic prefix fixture
             Some(TokenType::BotOAuth)
         );
     }
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn test_token_type_from_prefix_browser() {
         assert_eq!(
-            TokenType::from_prefix("xoxc-123456789-0"),
+            TokenType::from_prefix("xoxc-123456789-0"), // aislop-ignore-line security/hardcoded-secret -- synthetic prefix fixture
             Some(TokenType::Browser)
         );
     }
@@ -369,7 +369,10 @@ mod tests {
     #[test]
     fn test_token_type_from_prefix_invalid() {
         assert_eq!(TokenType::from_prefix("invalid-token"), None);
-        assert_eq!(TokenType::from_prefix("xoxa-123456789-0"), None);
+        assert_eq!(
+            TokenType::from_prefix("xoxa-123456789-0"), // aislop-ignore-line security/hardcoded-secret -- synthetic invalid-prefix fixture
+            None
+        );
         assert_eq!(TokenType::from_prefix(""), None);
     }
 
@@ -382,14 +385,14 @@ mod tests {
 
     #[test]
     fn test_validate_token_format_valid() {
-        assert!(validate_token_format("xoxp-123456789-0123456789-abcdef").is_ok());
-        assert!(validate_token_format("xoxb-123456789-0123456789-abcdef").is_ok());
+        assert!(validate_token_format("xoxp-123456789-0123456789-abcdef").is_ok()); // aislop-ignore-line security/hardcoded-secret -- synthetic validation fixture
+        assert!(validate_token_format("xoxb-123456789-0123456789-abcdef").is_ok()); // aislop-ignore-line security/hardcoded-secret -- synthetic validation fixture
         assert!(validate_token_format("xoxc-123456789-0123456789-abcdef").is_ok());
     }
 
     #[test]
     fn test_validate_token_format_too_short() {
-        let result = validate_token_format("xoxp-123");
+        let result = validate_token_format("xoxp-123"); // aislop-ignore-line security/hardcoded-secret -- synthetic short-token fixture
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), SlackError::InvalidToken(_)));
     }
@@ -402,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_validate_token_format_invalid_chars() {
-        let result = validate_token_format("xoxp-123456789!@#$%");
+        let result = validate_token_format("xoxp-123456789!@#$%"); // aislop-ignore-line security/hardcoded-secret -- synthetic malformed fixture
         assert!(result.is_err());
     }
 
@@ -427,7 +430,7 @@ mod tests {
     #[test]
     fn test_token_set_new_oauth_user() {
         let result = TokenSet::new_oauth(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test Workspace".into(),
             "U12345".into(),
@@ -442,7 +445,7 @@ mod tests {
     #[test]
     fn test_token_set_new_oauth_bot() {
         let result = TokenSet::new_oauth(
-            "xoxb-123456789-0123456789-abcdef".into(),
+            "xoxb-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test Workspace".into(),
             "U12345".into(),
@@ -483,7 +486,7 @@ mod tests {
     #[test]
     fn test_token_set_new_browser_rejects_non_xoxc() {
         let result = TokenSet::new_browser(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic invalid-type fixture
             "xoxd-cookie-value".into(),
             "T12345".into(),
             "Test Workspace".into(),
@@ -495,7 +498,7 @@ mod tests {
     #[test]
     fn test_token_set_validate() {
         let token_set = TokenSet::new_oauth(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test Workspace".into(),
             "U12345".into(),
@@ -508,7 +511,7 @@ mod tests {
     #[test]
     fn test_token_set_supports_search() {
         let user_token = TokenSet::new_oauth(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test".into(),
             "U12345".into(),
@@ -518,7 +521,7 @@ mod tests {
         assert!(user_token.supports_search());
 
         let bot_token = TokenSet::new_oauth(
-            "xoxb-123456789-0123456789-abcdef".into(),
+            "xoxb-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test".into(),
             "U12345".into(),
@@ -541,7 +544,7 @@ mod tests {
     #[test]
     fn test_token_set_auth_header() {
         let token_set = TokenSet::new_oauth(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test".into(),
             "U12345".into(),
@@ -550,14 +553,14 @@ mod tests {
         .unwrap();
         assert_eq!(
             token_set.auth_header(),
-            "Bearer xoxp-123456789-0123456789-abcdef"
+            "Bearer xoxp-123456789-0123456789-abcdef" // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
         );
     }
 
     #[test]
     fn test_token_set_serialization_roundtrip() {
         let original = TokenSet::new_oauth(
-            "xoxp-123456789-0123456789-abcdef".into(),
+            "xoxp-123456789-0123456789-abcdef".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
             "T12345".into(),
             "Test Workspace".into(),
             "U12345".into(),

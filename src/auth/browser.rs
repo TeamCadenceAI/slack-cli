@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn test_browser_tokens_invalid_xoxc_prefix() {
         let tokens = BrowserTokens::new(
-            "xoxp-1234567890-abcdef123456789012345678901234567890".into(),
+            "xoxp-1234567890-abcdef123456789012345678901234567890".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic invalid-prefix fixture
             "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
         );
 
@@ -249,7 +249,7 @@ mod tests {
         // but should be long encoded values
         let tokens = BrowserTokens::new(
             "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c".into(),
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c".into(), // aislop-ignore-line security/hardcoded-secret -- synthetic legacy cookie fixture
         );
 
         // Long JWT-like cookie should be accepted

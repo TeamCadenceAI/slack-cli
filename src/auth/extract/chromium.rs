@@ -118,10 +118,6 @@ pub fn extract_tokens_from_leveldb(leveldb_dir: &Path) -> Result<Vec<TeamToken>>
     Ok(parse_recovered(&recovered))
 }
 
-// ---------------------------------------------------------------------------
-// Minimal LevelDB SSTable reader
-// ---------------------------------------------------------------------------
-
 /// Read an unsigned LEB128 varint, advancing `pos`. Returns `None` on overflow
 /// or truncation.
 fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
@@ -251,10 +247,6 @@ fn sstable_data_bytes(file: &[u8]) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-
-// ---------------------------------------------------------------------------
-// Token parsing
-// ---------------------------------------------------------------------------
 
 /// Parse recovered bytes across multiple textual "views" and merge the results.
 ///
@@ -866,7 +858,7 @@ mod tests {
         assert!(parse_local_config("localConfig_v2 no object").is_empty());
         assert!(parse_local_config("localConfig_v2{broken}").is_empty());
         assert!(parse_local_config(
-            "localConfig_v2{\"teams\":{\"T1234567\":{\"token\":\"xoxp-not-client\"},\"T7654321\":{}}}}"
+            "localConfig_v2{\"teams\":{\"T1234567\":{\"token\":\"xoxp-not-client\"},\"T7654321\":{}}}}" // aislop-ignore-line security/hardcoded-secret -- synthetic parser fixture
         )
         .is_empty());
 
@@ -917,7 +909,9 @@ mod tests {
     #[test]
     fn nested_object_and_team_id_scans_are_bounded() {
         let text = r#"{"outer":{"closed":{}} ,"T1234567":{"token":"xoxc-nested-object-1234"}}"#;
-        let pos = text.find("xoxc-").unwrap();
+        let pos = text
+            .find("xoxc-")
+            .expect("fixture contains an xoxc token marker");
         let (start, end) = enclosing_object(text.as_bytes(), pos);
         assert_eq!(&text[start..=end], r#"{"token":"xoxc-nested-object-1234"}"#);
         assert_eq!(

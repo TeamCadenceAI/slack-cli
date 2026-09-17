@@ -20,10 +20,6 @@ use super::types::{
 /// Maximum file download size (5MB)
 const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024;
 
-// ============================================================================
-// Auth Methods
-// ============================================================================
-
 impl SlackClient {
     /// Test authentication and get information about the token
     ///
@@ -35,10 +31,6 @@ impl SlackClient {
         self.request("auth.test", &Params {}).await
     }
 }
-
-// ============================================================================
-// Conversations Methods
-// ============================================================================
 
 /// Parameters for conversations.list
 #[derive(Debug, Serialize, Default)]
@@ -367,10 +359,6 @@ impl SlackClient {
     }
 }
 
-// ============================================================================
-// Chat Methods
-// ============================================================================
-
 /// Parameters for chat.postMessage
 #[derive(Debug, Serialize)]
 pub struct ChatPostMessageParams {
@@ -441,10 +429,6 @@ impl SlackClient {
     }
 }
 
-// ============================================================================
-// Search Methods
-// ============================================================================
-
 /// Parameters for search.messages
 #[derive(Debug, Serialize)]
 pub struct SearchMessagesParams {
@@ -505,10 +489,6 @@ impl SlackClient {
     }
 }
 
-// ============================================================================
-// Users Methods
-// ============================================================================
-
 impl SlackClient {
     /// List all users in the workspace
     ///
@@ -562,10 +542,6 @@ impl SlackClient {
     }
 }
 
-// ============================================================================
-// Reactions Methods
-// ============================================================================
-
 impl SlackClient {
     /// Add a reaction to a message
     ///
@@ -617,10 +593,6 @@ impl SlackClient {
         Ok(())
     }
 }
-
-// ============================================================================
-// Files Methods
-// ============================================================================
 
 impl SlackClient {
     /// Get information about a file
@@ -700,10 +672,6 @@ impl SlackClient {
     }
 }
 
-// ============================================================================
-// Reactions Get Method
-// ============================================================================
-
 impl SlackClient {
     /// Get reactions for a message
     ///
@@ -730,10 +698,6 @@ impl SlackClient {
         Ok(response.message)
     }
 }
-
-// ============================================================================
-// Reminders Methods
-// ============================================================================
 
 impl SlackClient {
     /// List reminders
@@ -801,10 +765,6 @@ impl SlackClient {
         Ok(())
     }
 }
-
-// ============================================================================
-// Status/Presence Methods
-// ============================================================================
 
 impl SlackClient {
     /// Get the current user's profile

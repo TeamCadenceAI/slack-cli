@@ -19,20 +19,16 @@ async fn main() {
 }
 
 async fn run() -> i32 {
-    // Parse CLI arguments
     let cli = Cli::parse();
 
-    // Initialize tracing based on verbose flag
     init_tracing(cli.verbose);
 
-    // Determine output mode
     let output_mode = if cli.plain {
         OutputMode::Plain
     } else {
         OutputMode::from_env()
     };
 
-    // Run the command
     let result = run_command(&cli).await;
 
     // Handle errors
