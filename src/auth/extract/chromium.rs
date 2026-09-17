@@ -857,10 +857,11 @@ mod tests {
     fn strict_and_fallback_parsers_cover_partial_records() {
         assert!(parse_local_config("localConfig_v2 no object").is_empty());
         assert!(parse_local_config("localConfig_v2{broken}").is_empty());
-        assert!(parse_local_config(
-            "localConfig_v2{\"teams\":{\"T1234567\":{\"token\":\"xoxp-not-client\"},\"T7654321\":{}}}}" // aislop-ignore-line security/hardcoded-secret -- synthetic parser fixture
-        )
-        .is_empty());
+        let non_client = format!(
+            "localConfig_v2{{\"teams\":{{\"T1234567\":{{\"token\":\"{}\"}},\"T7654321\":{{}}}}}}",
+            crate::test_fixtures::PARSER_NON_CLIENT
+        );
+        assert!(parse_local_config(&non_client).is_empty());
 
         let bare = "localConfig_v2{\"workspace\":{\"id\":\"TEXPLICIT\",\"token\":\"xoxc-bare-map-123456\"}}";
         let tokens = parse_local_config(bare);

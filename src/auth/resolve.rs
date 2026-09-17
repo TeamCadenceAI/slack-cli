@@ -64,9 +64,9 @@ mod tests {
 
     #[test]
     fn test_override_user_oauth_token() {
-        let token = resolve_token(None, Some("xoxp-1234567890-abcdef")).unwrap(); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+        let token = resolve_token(None, Some(crate::test_fixtures::USER_OVERRIDE)).unwrap();
         assert_eq!(token.token_type, TokenType::UserOAuth);
-        assert_eq!(token.access_token, "xoxp-1234567890-abcdef"); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+        assert_eq!(token.access_token, crate::test_fixtures::USER_OVERRIDE);
         assert_eq!(token.team_id, "unknown");
         assert_eq!(token.team_name, "unknown");
         assert_eq!(token.user_id, "unknown");
@@ -76,9 +76,9 @@ mod tests {
 
     #[test]
     fn test_override_bot_oauth_token() {
-        let token = resolve_token(None, Some("xoxb-1234567890-abcdef")).unwrap(); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+        let token = resolve_token(None, Some(crate::test_fixtures::BOT_OVERRIDE)).unwrap();
         assert_eq!(token.token_type, TokenType::BotOAuth);
-        assert_eq!(token.access_token, "xoxb-1234567890-abcdef"); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+        assert_eq!(token.access_token, crate::test_fixtures::BOT_OVERRIDE);
     }
 
     #[test]
@@ -87,15 +87,15 @@ mod tests {
         // never consulted (a nonexistent workspace would otherwise error).
         let token = resolve_token(
             Some("definitely-not-a-real-workspace"),
-            Some("xoxp-1234567890-abcdef"), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+            Some(crate::test_fixtures::USER_OVERRIDE),
         )
         .unwrap();
-        assert_eq!(token.access_token, "xoxp-1234567890-abcdef"); // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+        assert_eq!(token.access_token, crate::test_fixtures::USER_OVERRIDE);
     }
 
     #[test]
     fn test_override_browser_token_rejected() {
-        let err = resolve_token(None, Some("xoxc-1234567890-abcdef")).unwrap_err(); // aislop-ignore-line security/hardcoded-secret -- synthetic browser fixture
+        let err = resolve_token(None, Some(crate::test_fixtures::BROWSER_OVERRIDE)).unwrap_err();
         match err {
             SlackError::InvalidToken(msg) => {
                 assert!(msg.contains("--xoxc and --xoxd"), "unexpected msg: {}", msg);
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_override_malformed_token_rejected() {
         // Valid prefix but invalid characters fails TokenSet validation.
-        let err = resolve_token(None, Some("xoxp-bad token!")).unwrap_err(); // aislop-ignore-line security/hardcoded-secret -- synthetic malformed fixture
+        let err = resolve_token(None, Some(crate::test_fixtures::MALFORMED_OVERRIDE)).unwrap_err();
         assert!(matches!(err, SlackError::InvalidToken(_)));
     }
 }

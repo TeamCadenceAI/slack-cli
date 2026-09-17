@@ -839,7 +839,7 @@ mod tests {
             "auth",
             "add",
             "--token",
-            "xoxp-123456789", // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
+            crate::test_fixtures::CLI_TOKEN,
         ])
         .unwrap();
         if let crate::cli::Commands::Auth(auth_cmd) = cli.command {
@@ -851,7 +851,7 @@ mod tests {
                 ..
             } = auth_cmd.command
             {
-                assert_eq!(token, Some("xoxp-123456789".to_string())); // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
+                assert_eq!(token, Some(crate::test_fixtures::CLI_TOKEN.to_string()));
                 assert!(xoxc.is_none());
                 assert!(xoxd.is_none());
                 assert!(!oauth);
@@ -917,8 +917,11 @@ mod tests {
     #[test]
     fn test_parse_auth_add_conflicts_token_and_oauth() {
         let result = Cli::try_parse_from([
-            "slack", "auth", "add", "--token",
-            "xoxp-123", // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
+            "slack",
+            "auth",
+            "add",
+            "--token",
+            crate::test_fixtures::CLI_SHORT_TOKEN,
             "--oauth",
         ]);
         assert!(result.is_err());
@@ -927,9 +930,15 @@ mod tests {
     #[test]
     fn test_parse_auth_add_conflicts_token_and_xoxc() {
         let result = Cli::try_parse_from([
-            "slack", "auth", "add", "--token",
-            "xoxp-123", // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
-            "--xoxc", "xoxc-456", "--xoxd", "xoxd-789",
+            "slack",
+            "auth",
+            "add",
+            "--token",
+            crate::test_fixtures::CLI_SHORT_TOKEN,
+            "--xoxc",
+            "xoxc-456",
+            "--xoxd",
+            "xoxd-789",
         ]);
         assert!(result.is_err());
     }
@@ -1038,8 +1047,12 @@ mod tests {
     fn test_parse_auth_add_positional_conflicts_with_token() {
         // A positional workspace and an explicit --token are mutually exclusive.
         let result = Cli::try_parse_from([
-            "slack", "auth", "add", "myteam", "--token",
-            "xoxp-123", // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
+            "slack",
+            "auth",
+            "add",
+            "myteam",
+            "--token",
+            crate::test_fixtures::CLI_SHORT_TOKEN,
         ]);
         assert!(result.is_err());
     }
@@ -1188,7 +1201,7 @@ mod tests {
             "add",
             "--from-browser",
             "--token",
-            "xoxp-123", // aislop-ignore-line security/hardcoded-secret -- synthetic CLI fixture
+            crate::test_fixtures::CLI_SHORT_TOKEN,
         ]);
         assert!(result.is_err());
     }

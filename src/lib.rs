@@ -5,3 +5,11 @@ pub mod error;
 pub mod models;
 pub mod output;
 pub mod utils;
+
+#[cfg(test)]
+pub(crate) mod test_fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/aislop_tokens.rs"
+    ));
+}

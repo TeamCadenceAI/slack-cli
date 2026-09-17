@@ -1,14 +1,8 @@
-# Architecture rules (BYO)
-# Uncomment and customize to enforce your project's conventions.
-#
-# rules:
-#   - name: no-axios
-#     type: forbid_import
-#     match: "axios"
-#     severity: error
-#
-#   - name: controller-no-db
-#     type: forbid_import_from_path
-#     from: "src/controllers/**"
-#     forbid: "src/db/**"
-#     severity: error
+# Keep credential storage behind the authentication layer.
+# CLI modules should use the auth service rather than importing keyring directly.
+rules:
+  - name: no-keyring-outside-auth
+    type: forbid_import
+    from: "src/cli/**"
+    match: "keyring"
+    severity: error

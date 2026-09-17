@@ -1,0 +1,2 @@
+# Synthetic credentials are test-only fixtures included by the unit-test crate.
+tests/fixtures/aislop_tokens.rs

@@ -475,93 +475,52 @@ mod tests {
     }
 
     impl MemorySecretStore {
+        fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+            mutex.lock().expect("memory store lock poisoned")
+        }
+
         fn seed(&self, key: &str, value: impl Into<String>) {
-            self.entries
-                .lock()
-                .expect("memory store entries lock poisoned")
-                .insert(key.to_string(), value.into());
+            Self::lock(&self.entries).insert(key.to_string(), value.into());
         }
 
         fn value(&self, key: &str) -> Option<String> {
-            self.entries
-                .lock()
-                .expect("memory store entries lock poisoned")
-                .get(key)
-                .cloned()
+            Self::lock(&self.entries).get(key).cloned()
         }
 
         fn operations(&self) -> Vec<String> {
-            self.operations
-                .lock()
-                .expect("memory store operations lock poisoned")
-                .clone()
+            Self::lock(&self.operations).clone()
         }
 
         fn fail_get(&self, key: &str) {
-            self.failing_gets
-                .lock()
-                .expect("memory store failing-gets lock poisoned")
-                .insert(key.to_string());
+            Self::lock(&self.failing_gets).insert(key.to_string());
         }
 
         fn fail_sets(&self) {
-            *self
-                .fail_sets
-                .lock()
-                .expect("memory store fail-sets lock poisoned") = true;
+            *Self::lock(&self.fail_sets) = true;
         }
     }
 
     impl SecretStore for MemorySecretStore {
         fn get(&self, key: &str) -> Result<Option<String>> {
-            self.operations
-                .lock()
-                .expect("memory store operations lock poisoned")
-                .push(format!("get:{key}"));
-            if self
-                .failing_gets
-                .lock()
-                .expect("memory store failing-gets lock poisoned")
-                .contains(key)
-            {
+            Self::lock(&self.operations).push(format!("get:{key}"));
+            if Self::lock(&self.failing_gets).contains(key) {
                 return Err(SlackError::Other(format!("failed get: {key}")));
             }
-            Ok(self
-                .entries
-                .lock()
-                .expect("memory store entries lock poisoned")
-                .get(key)
-                .cloned())
+            Ok(Self::lock(&self.entries).get(key).cloned())
         }
 
         fn set(&self, key: &str, value: &str) -> Result<()> {
-            self.operations
-                .lock()
-                .expect("memory store operations lock poisoned")
-                .push(format!("set:{key}"));
-            if *self
-                .fail_sets
-                .lock()
-                .expect("memory store fail-sets lock poisoned")
-            {
+            Self::lock(&self.operations).push(format!("set:{key}"));
+            if *Self::lock(&self.fail_sets) {
                 return Err(SlackError::Other("failed set".into()));
             }
-            self.entries
-                .lock()
-                .expect("memory store entries lock poisoned")
-                .insert(key.to_string(), value.to_string());
+            Self::lock(&self.entries).insert(key.to_string(), value.to_string());
             Ok(())
         }
 
         fn delete(&self, key: &str) -> Result<()> {
-            self.operations
-                .lock()
-                .expect("memory store operations lock poisoned")
-                .push(format!("delete:{key}"));
-            self.entries
-                .lock()
-                .expect("memory store entries lock poisoned")
-                .remove(key);
+            Self::lock(&self.operations).push(format!("delete:{key}"));
+            Self::lock(&self.entries).remove(key);
             Ok(())
         }
     }

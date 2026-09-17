@@ -582,7 +582,7 @@ mod tests {
         match token_type {
             TokenType::UserOAuth => TokenSet {
                 token_type: TokenType::UserOAuth,
-                access_token: "xoxp-123456789-0123456789-abcdef".to_string(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+                access_token: crate::test_fixtures::USER_OAUTH.to_string(),
                 xoxd_cookie: None,
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
@@ -593,7 +593,7 @@ mod tests {
             },
             TokenType::BotOAuth => TokenSet {
                 token_type: TokenType::BotOAuth,
-                access_token: "xoxb-123456789-0123456789-abcdef".to_string(), // aislop-ignore-line security/hardcoded-secret -- synthetic OAuth fixture
+                access_token: crate::test_fixtures::BOT_OAUTH.to_string(),
                 xoxd_cookie: None,
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
@@ -604,7 +604,7 @@ mod tests {
             },
             TokenType::Browser => TokenSet {
                 token_type: TokenType::Browser,
-                access_token: "xoxc-123456789-0123456789-abcdef".to_string(), // aislop-ignore-line security/hardcoded-secret -- synthetic browser fixture
+                access_token: crate::test_fixtures::BROWSER.to_string(),
                 xoxd_cookie: Some("xoxd-test-cookie".to_string()),
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
