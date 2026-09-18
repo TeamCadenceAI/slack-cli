@@ -5,4 +5,6 @@ run-ralph-loop.sh
 /.claude
 /.codex
 /.pi
-/.aislop
+/.aislop/*
+!/.aislop/config.yml
+!/.aislop/rules.yml

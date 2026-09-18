@@ -168,8 +168,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_valid() {
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
+            crate::test_fixtures::BROWSER_COOKIE.into(),
         );
 
         assert!(tokens.validate().is_ok());
@@ -179,8 +179,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_invalid_xoxc_prefix() {
         let tokens = BrowserTokens::new(
-            "xoxp-1234567890-abcdef123456789012345678901234567890".into(),
-            "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+            crate::test_fixtures::INVALID_BROWSER_PREFIX.into(),
+            crate::test_fixtures::BROWSER_COOKIE.into(),
         );
 
         let result = tokens.validate();
@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_xoxc_too_short() {
         let tokens = BrowserTokens::new(
-            "xoxc-123".into(),
-            "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+            crate::test_fixtures::SHORT_BROWSER.into(),
+            crate::test_fixtures::BROWSER_COOKIE.into(),
         );
 
         let result = tokens.validate();
@@ -202,8 +202,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_xoxc_invalid_chars() {
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef!@#$%^&*()".into(),
-            "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+            crate::test_fixtures::INVALID_BROWSER_CHARS.into(),
+            crate::test_fixtures::BROWSER_COOKIE.into(),
         );
 
         let result = tokens.validate();
@@ -212,10 +212,7 @@ mod tests {
 
     #[test]
     fn test_browser_tokens_empty_xoxd() {
-        let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "".into(),
-        );
+        let tokens = BrowserTokens::new(crate::test_fixtures::BROWSER_LONG.into(), "".into());
 
         let result = tokens.validate();
         assert!(result.is_err());
@@ -224,8 +221,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_xoxd_with_newlines() {
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "xoxd-abc\ndef".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
+            crate::test_fixtures::BROWSER_COOKIE_NEWLINE.into(),
         );
 
         let result = tokens.validate();
@@ -235,8 +232,8 @@ mod tests {
     #[test]
     fn test_browser_tokens_xoxd_carriage_return() {
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "xoxd-abc\rdef".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
+            crate::test_fixtures::BROWSER_COOKIE_CARRIAGE_RETURN.into(),
         );
 
         let result = tokens.validate();
@@ -248,8 +245,8 @@ mod tests {
         // Older xoxd cookies might not start with xoxd-
         // but should be long encoded values
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
+            crate::test_fixtures::LEGACY_BROWSER_COOKIE.into(),
         );
 
         // Long JWT-like cookie should be accepted
@@ -260,7 +257,7 @@ mod tests {
     fn test_browser_tokens_short_non_xoxd() {
         // Short non-xoxd cookie is likely wrong
         let tokens = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
             "shortcookie".into(),
         );
 
@@ -271,8 +268,8 @@ mod tests {
     #[test]
     fn test_is_valid_format() {
         let valid = BrowserTokens::new(
-            "xoxc-1234567890-abcdef123456789012345678901234567890".into(),
-            "xoxd-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+            crate::test_fixtures::BROWSER_LONG.into(),
+            crate::test_fixtures::BROWSER_COOKIE.into(),
         );
         assert!(valid.is_valid_format());
 

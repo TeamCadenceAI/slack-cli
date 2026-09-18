@@ -323,7 +323,7 @@ mod tests {
     fn create_browser_token() -> TokenSet {
         TokenSet {
             token_type: TokenType::Browser,
-            access_token: "xoxc-1234567890-0123456789-abcdefghij".to_string(),
+            access_token: crate::test_fixtures::BROWSER.to_string(),
             xoxd_cookie: Some("xoxd-test-cookie-value".to_string()),
             team_id: "T12345".to_string(),
             team_name: "Test Team".to_string(),
@@ -337,7 +337,7 @@ mod tests {
     fn create_oauth_token() -> TokenSet {
         TokenSet {
             token_type: TokenType::UserOAuth,
-            access_token: "xoxp-1234567890-0123456789-abcdefghij".to_string(),
+            access_token: crate::test_fixtures::USER_OAUTH.to_string(),
             xoxd_cookie: None,
             team_id: "T12345".to_string(),
             team_name: "Test Team".to_string(),

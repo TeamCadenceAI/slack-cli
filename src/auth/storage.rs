@@ -475,57 +475,52 @@ mod tests {
     }
 
     impl MemorySecretStore {
+        fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+            mutex.lock().expect("memory store lock poisoned")
+        }
+
         fn seed(&self, key: &str, value: impl Into<String>) {
-            self.entries
-                .lock()
-                .unwrap()
-                .insert(key.to_string(), value.into());
+            Self::lock(&self.entries).insert(key.to_string(), value.into());
         }
 
         fn value(&self, key: &str) -> Option<String> {
-            self.entries.lock().unwrap().get(key).cloned()
+            Self::lock(&self.entries).get(key).cloned()
         }
 
         fn operations(&self) -> Vec<String> {
-            self.operations.lock().unwrap().clone()
+            Self::lock(&self.operations).clone()
         }
 
         fn fail_get(&self, key: &str) {
-            self.failing_gets.lock().unwrap().insert(key.to_string());
+            Self::lock(&self.failing_gets).insert(key.to_string());
         }
 
         fn fail_sets(&self) {
-            *self.fail_sets.lock().unwrap() = true;
+            *Self::lock(&self.fail_sets) = true;
         }
     }
 
     impl SecretStore for MemorySecretStore {
         fn get(&self, key: &str) -> Result<Option<String>> {
-            self.operations.lock().unwrap().push(format!("get:{key}"));
-            if self.failing_gets.lock().unwrap().contains(key) {
+            Self::lock(&self.operations).push(format!("get:{key}"));
+            if Self::lock(&self.failing_gets).contains(key) {
                 return Err(SlackError::Other(format!("failed get: {key}")));
             }
-            Ok(self.entries.lock().unwrap().get(key).cloned())
+            Ok(Self::lock(&self.entries).get(key).cloned())
         }
 
         fn set(&self, key: &str, value: &str) -> Result<()> {
-            self.operations.lock().unwrap().push(format!("set:{key}"));
-            if *self.fail_sets.lock().unwrap() {
+            Self::lock(&self.operations).push(format!("set:{key}"));
+            if *Self::lock(&self.fail_sets) {
                 return Err(SlackError::Other("failed set".into()));
             }
-            self.entries
-                .lock()
-                .unwrap()
-                .insert(key.to_string(), value.to_string());
+            Self::lock(&self.entries).insert(key.to_string(), value.to_string());
             Ok(())
         }
 
         fn delete(&self, key: &str) -> Result<()> {
-            self.operations
-                .lock()
-                .unwrap()
-                .push(format!("delete:{key}"));
-            self.entries.lock().unwrap().remove(key);
+            Self::lock(&self.operations).push(format!("delete:{key}"));
+            Self::lock(&self.entries).remove(key);
             Ok(())
         }
     }

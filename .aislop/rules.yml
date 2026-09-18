@@ -1,0 +1,8 @@
+# Keep credential storage behind the authentication layer.
+# CLI modules should use the auth service rather than importing keyring directly.
+rules:
+  - name: no-keyring-outside-auth
+    type: forbid_import
+    from: "src/cli/**"
+    match: "keyring"
+    severity: error

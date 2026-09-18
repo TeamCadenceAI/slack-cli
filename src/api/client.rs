@@ -582,7 +582,7 @@ mod tests {
         match token_type {
             TokenType::UserOAuth => TokenSet {
                 token_type: TokenType::UserOAuth,
-                access_token: "xoxp-123456789-0123456789-abcdef".to_string(),
+                access_token: crate::test_fixtures::USER_OAUTH.to_string(),
                 xoxd_cookie: None,
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
@@ -593,7 +593,7 @@ mod tests {
             },
             TokenType::BotOAuth => TokenSet {
                 token_type: TokenType::BotOAuth,
-                access_token: "xoxb-123456789-0123456789-abcdef".to_string(),
+                access_token: crate::test_fixtures::BOT_OAUTH.to_string(),
                 xoxd_cookie: None,
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
@@ -604,7 +604,7 @@ mod tests {
             },
             TokenType::Browser => TokenSet {
                 token_type: TokenType::Browser,
-                access_token: "xoxc-123456789-0123456789-abcdef".to_string(),
+                access_token: crate::test_fixtures::BROWSER.to_string(),
                 xoxd_cookie: Some("xoxd-test-cookie".to_string()),
                 team_id: "T12345".to_string(),
                 team_name: "Test".to_string(),
@@ -812,8 +812,6 @@ mod tests {
         assert!(client.base_url().contains("slack.com") || client.base_url().starts_with("http"));
     }
 
-    // --- normalize_api_endpoint / api_request validation -------------------
-
     #[test]
     fn test_normalize_endpoint_bare_method_names() {
         for m in [
@@ -874,10 +872,10 @@ mod tests {
             "ftp://slack.com/api/auth.test",
             "file:///etc/passwd",
             // Wrong host / lookalikes
-            "https://evil.com/api/auth.test",
-            "https://slack.com.evil.com/api/auth.test",
+            "https://evil.com/api/auth.test", // aislop-ignore-line ai-slop/hardcoded-url -- invalid-host validation fixture
+            "https://slack.com.evil.com/api/auth.test", // aislop-ignore-line ai-slop/hardcoded-url -- lookalike-host validation fixture
             "https://api.slack.com/api/auth.test",
-            "https://slack.com@evil.com/api/auth.test",
+            "https://slack.com@evil.com/api/auth.test", // aislop-ignore-line ai-slop/hardcoded-url -- userinfo validation fixture
             // Userinfo
             "https://user:pass@slack.com/api/auth.test",
             "https://user@slack.com/api/auth.test",
@@ -914,7 +912,7 @@ mod tests {
         let client = SlackClient::with_base_url(token, "http://127.0.0.1:1".to_string()).unwrap();
         let err = client
             .api_request(
-                "https://evil.com/api/auth.test",
+                "https://evil.com/api/auth.test", // aislop-ignore-line ai-slop/hardcoded-url -- invalid-host validation fixture
                 reqwest::Method::GET,
                 &serde_json::Value::Null,
             )
